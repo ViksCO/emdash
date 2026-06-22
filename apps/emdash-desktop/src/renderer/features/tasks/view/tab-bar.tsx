@@ -98,6 +98,19 @@ export const TabBar = observer(function TabBar() {
     el?.scrollIntoView({ behavior: 'instant', inline: 'nearest', block: 'nearest' });
   }, [tabManager.activeTabId]);
 
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY !== 0 && e.deltaX === 0) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
   return (
     <div className="task-tab-bar flex h-[41px] shrink-0 items-center justify-between border-b border-border bg-background-secondary">
       <div ref={scrollContainerRef} className="flex h-full w-full overflow-x-auto">
