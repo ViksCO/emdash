@@ -1,8 +1,9 @@
 import { SquareArrowRight, SquareDot, SquareMinus, SquarePlus, SquareX } from 'lucide-react';
-import { forwardRef, useMemo, type ButtonHTMLAttributes } from 'react';
+import { forwardRef, useState, useMemo, type ButtonHTMLAttributes, type MouseEvent } from 'react';
 import { splitPath } from '@renderer/features/tasks/utils';
 import { FileIcon } from '@renderer/lib/editor/file-icon';
 import { Checkbox } from '@renderer/lib/ui/checkbox';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/lib/ui/tooltip';
 import { formatDiffLineCount } from '@renderer/utils/format-diff-line-count';
 import { cn } from '@renderer/utils/utils';
 import { type GitChange, type GitChangeStatus } from '@shared/core/git/git';
@@ -17,34 +18,46 @@ interface ChangesListItemProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 export const ChangesListItem = forwardRef<HTMLButtonElement, ChangesListItemProps>(
   ({ change, isSelected, isActive, onToggleSelect, className, ...props }, ref) => {
     const { filename, directory } = useMemo(() => splitPath(change.path), [change.path]);
+    const [showTooltip, setShowTooltip] = useState(false);
+
+    const handleMouseEnter = (e: MouseEvent<HTMLButtonElement>) => {
+      const truncated = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('.truncate'));
+      setShowTooltip(truncated.some((el) => el.scrollWidth > el.clientWidth));
+      props.onMouseEnter?.(e);
+    };
+
     return (
-      <button
-        className={cn(
-          'group/item w-full flex items-center gap-2 justify-between px-2 py-1 hover:bg-background-1 h-7 rounded-md',
-          isActive && 'bg-background-2 hover:bg-background-2',
-          className
-        )}
-        ref={ref}
-        {...props}
-      >
-        <div className="flex min-w-0 flex-1 items-center gap-1.5">
-          <FileIcon filename={filename} size={12} />
-          <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-            <span className="max-w-full shrink-0 truncate text-sm">{filename}</span>
-            {directory && (
-              <span className="min-w-0 shrink truncate text-xs text-foreground-muted">
-                {directory}
-              </span>
-            )}
-          </span>
-        </div>
-        <ChangeStatusAffordance
-          change={change}
-          filename={filename}
-          isSelected={isSelected}
-          onToggleSelect={onToggleSelect}
-        />
-      </button>
+      <Tooltip>
+        <TooltipTrigger
+          className={cn(
+            'group/item w-full flex items-center gap-2 justify-between px-2 py-1 hover:bg-background-1 h-7 rounded-md',
+            isActive && 'bg-background-2 hover:bg-background-2',
+            className
+          )}
+          ref={ref}
+          {...props}
+          onMouseEnter={handleMouseEnter}
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            <FileIcon filename={filename} size={12} />
+            <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+              <span className="max-w-full shrink-0 truncate text-sm">{filename}</span>
+              {directory && (
+                <span className="min-w-0 shrink truncate text-xs text-foreground-muted">
+                  {directory}
+                </span>
+              )}
+            </span>
+          </div>
+          <ChangeStatusAffordance
+            change={change}
+            filename={filename}
+            isSelected={isSelected}
+            onToggleSelect={onToggleSelect}
+          />
+        </TooltipTrigger>
+        {showTooltip && <TooltipContent>{change.path}</TooltipContent>}
+      </Tooltip>
     );
   }
 );
