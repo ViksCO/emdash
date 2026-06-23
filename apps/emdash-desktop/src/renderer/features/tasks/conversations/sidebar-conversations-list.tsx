@@ -1,5 +1,5 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Pencil, Plus, Trash2 } from 'lucide-react';
+import { Pencil, Plus, SquareArrowOutUpRight, Trash2 } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useCallback, useRef, useState } from 'react';
 import { formatConversationTitleForDisplay } from '@renderer/features/tasks/conversations/conversation-title-utils';
@@ -98,6 +98,14 @@ const ConversationRow = observer(function ConversationRow({
           tabIndex={0}
           onClick={() => tabGroupManager.openConversationPreview(conversationId)}
           onDoubleClick={handleDoubleClick}
+          onMouseDown={(e) => {
+            if (e.button === 1) e.preventDefault();
+          }}
+          onAuxClick={(e) => {
+            if (e.button === 1) {
+              tabGroupManager.openConversation(conversationId);
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
@@ -105,7 +113,7 @@ const ConversationRow = observer(function ConversationRow({
             }
           }}
           className={cn(
-            'flex w-full items-center gap-2 h-8 rounded-md px-2 text-left text-sm text-foreground-muted transition-colors hover:bg-background-1 hover:text-foreground',
+            'group flex w-full items-center gap-2 h-8 rounded-md px-2 text-left text-sm text-foreground-muted transition-colors hover:bg-background-1 hover:text-foreground',
             isActive && 'bg-background-2 text-foreground hover:bg-background-2'
           )}
         >
@@ -131,17 +139,34 @@ const ConversationRow = observer(function ConversationRow({
           ) : (
             <span className="min-w-0 flex-1 truncate">{displayTitle}</span>
           )}
-          <span className="shrink-0">
+          <div className="flex shrink-0 items-center gap-1">
             {conversation.indicatorStatus ? (
               <AgentStatusIndicator status={conversation.indicatorStatus} disableTooltip />
             ) : (
               <RelativeTime
                 value={conversation.data.lastInteractedAt ?? ''}
-                className="flex h-full items-center pr-1 font-mono text-xs text-foreground-passive"
+                className="flex h-full items-center pr-1 font-mono text-xs text-foreground-passive group-hover:hidden"
                 compact
               />
             )}
-          </span>
+            {!isEditing && (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                tabIndex={-1}
+                className="hidden group-hover:inline-flex"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  tabGroupManager.openConversation(conversationId);
+                }}
+                onAuxClick={(e) => e.stopPropagation()}
+                title="Open in tab"
+                aria-label={`Open conversation${displayTitle ? ` ${displayTitle}` : ''} in a tab`}
+              >
+                <SquareArrowOutUpRight />
+              </Button>
+            )}
+          </div>
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent finalFocus={false}>
