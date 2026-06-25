@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
@@ -103,4 +106,54 @@ describe('AppService.openIn', () => {
     expect(mocks.openPath).toHaveBeenCalledWith(target);
     expect(mocks.exec).not.toHaveBeenCalled();
   });
+});
+
+describe('AppService file jail', () => {
+  const tempDirs: string[] = [];
+
+  afterAll(async () => {
+    await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  async function writeTempFile(root: string, name: string, content: string): Promise<string> {
+    const dir = await mkdtemp(join(root, 'emdash-jail-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, name);
+    await writeFile(filePath, content, 'utf8');
+    return filePath;
+  }
+
+  it('reads a file under the OS temp directory', async () => {
+    const filePath = await writeTempFile(tmpdir(), 'note.md', 'temp content');
+    await expect(appService.readUserFile(filePath)).resolves.toEqual({ content: 'temp content' });
+  });
+
+  it.skipIf(process.platform === 'win32')('reads a file under /tmp', async () => {
+    const filePath = await writeTempFile('/tmp', 'note.md', 'tmp content');
+    await expect(appService.readUserFile(filePath)).resolves.toEqual({ content: 'tmp content' });
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects a path outside the home and temp directories',
+    async () => {
+      await expect(appService.readUserFile('/etc/hosts')).rejects.toThrow(
+        'Path must be inside the user home or a temporary directory'
+      );
+    }
+  );
+
+  it('reads an audio file under the OS temp directory', async () => {
+    const filePath = await writeTempFile(tmpdir(), 'clip.wav', 'RIFFfake');
+    const dataUrl = await appService.readAudioFileDataUrl(filePath);
+    expect(dataUrl.startsWith('data:audio/wav;base64,')).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'rejects an audio file outside the home and temp directories',
+    async () => {
+      await expect(appService.readAudioFileDataUrl('/etc/hosts')).rejects.toThrow(
+        'Audio file must be located within the user home or a temporary directory'
+      );
+    }
+  );
 });

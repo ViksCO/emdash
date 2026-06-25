@@ -1,4 +1,4 @@
-import { Loader2 } from 'lucide-react';
+import { FileSymlink, Loader2 } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { FileIcon } from '@renderer/lib/editor/file-icon';
 import { useDelayedBoolean } from '@renderer/lib/hooks/use-delay-boolean';
@@ -41,7 +41,11 @@ export const FileTabItem = observer(function FileTabItem({
   const diskUri = modelRegistry.toDiskUri(tab.bufferUri);
   const diskStatus = modelRegistry.modelStatus.get(diskUri) ?? 'loading';
   const hasFileIssue = diskStatus === 'error' || diskStatus === 'too-large';
-  const showSpinner = useDelayedBoolean(isMonacoFile && diskStatus === 'loading', 200);
+  // External files load via readUserFile, not Monaco, so diskStatus is stuck at 'loading' — skip the spinner for them.
+  const showSpinner = useDelayedBoolean(
+    !tab.isExternal && isMonacoFile && diskStatus === 'loading',
+    200
+  );
 
   const errorTooltip = hasFileIssue ? fileTabErrorTooltip(diskStatus, diskUri) : undefined;
   const baseTitle = tab.isPreview ? `${tab.path} (preview — double-click to keep)` : tab.path;
@@ -59,6 +63,8 @@ export const FileTabItem = observer(function FileTabItem({
       <span className="shrink-0 [&>svg]:h-3 [&>svg]:w-3">
         {showSpinner ? (
           <Loader2 className="h-3 w-3 animate-spin" />
+        ) : tab.isExternal ? (
+          <FileSymlink className="h-3 w-3 text-foreground-passive" />
         ) : (
           <FileIcon filename={fileName} />
         )}

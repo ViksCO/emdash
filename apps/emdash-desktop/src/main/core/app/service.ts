@@ -1,10 +1,11 @@
 import { exec } from 'node:child_process';
 import { readFile, realpath, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { extname, isAbsolute, join, resolve, sep } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { extname, isAbsolute, join, parse } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { app, clipboard, dialog, shell } from 'electron';
 import { getMainWindow } from '@main/app/window';
+import { isPathInsideRoot } from '@main/core/projects/worktrees/hosts/local-worktree-host';
 import { db } from '@main/db/client';
 import { sshConnections } from '@main/db/schema';
 import { events } from '@main/lib/events';
@@ -58,14 +59,51 @@ function expandAbsoluteOrTildePath(rawPath: string): string {
   return expanded;
 }
 
-async function resolveHomeJailedPath(rawPath: string): Promise<string> {
+// Reads below are driven by terminal output, so AI-injected paths must not be
+// able to reach arbitrary locations (e.g. `/etc/passwd`). They are jailed to the
+// user home directory plus the OS temp directories, where agents write scratch
+// files: `os.tmpdir()` (→ `/var/folders/…/T` on macOS) and `/tmp` (→ `/private/tmp`).
+const JAIL_ROOT_CANDIDATES = [homedir(), tmpdir(), '/tmp', '/private/tmp'];
+
+let cachedJailRoots: string[] | null = null;
+
+// Realpath each candidate so symlinked roots (e.g. macOS `/tmp` → `/private/tmp`)
+// match resolved paths. A candidate that doesn't exist on this platform (e.g. `/tmp`
+// on Windows) is dropped; any other realpath failure is transient and re-thrown
+// rather than silently shrinking the jail. A candidate resolving to the filesystem
+// root is dropped too — it would make every absolute path "inside" and collapse the
+// jail. Roots are process-constant, so the resolved set is computed once and cached.
+async function getJailRoots(): Promise<string[]> {
+  if (cachedJailRoots) return cachedJailRoots;
+  const resolved = await Promise.all(
+    JAIL_ROOT_CANDIDATES.map(async (candidate) => {
+      try {
+        return await realpath(candidate);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+    })
+  );
+  cachedJailRoots = [
+    ...new Set(
+      resolved.filter((root): root is string => root !== null && parse(root).root !== root)
+    ),
+  ];
+  return cachedJailRoots;
+}
+
+async function assertWithinJail(realPath: string, errorMessage: string): Promise<void> {
+  const roots = await getJailRoots();
+  if (!roots.some((root) => isPathInsideRoot(realPath, root))) {
+    throw new Error(errorMessage);
+  }
+}
+
+async function resolveJailedPath(rawPath: string): Promise<string> {
   const expanded = expandAbsoluteOrTildePath(rawPath);
   const realPath = await realpath(expanded);
-  const realHome = await realpath(homedir());
-  const realHomeWithSep = realHome.endsWith(sep) ? realHome : realHome + sep;
-  if (realPath !== realHome && !realPath.startsWith(realHomeWithSep)) {
-    throw new Error('Path must be inside the user home directory');
-  }
+  await assertWithinJail(realPath, 'Path must be inside the user home or a temporary directory');
   return realPath;
 }
 
@@ -206,18 +244,19 @@ class AppService implements IInitializable, IDisposable {
   }
 
   async openPath(rawPath: string): Promise<void> {
-    const realPath = await resolveHomeJailedPath(rawPath);
+    const realPath = await resolveJailedPath(rawPath);
     const errorMessage = await shell.openPath(realPath);
     if (errorMessage) throw new Error(errorMessage);
   }
 
   /**
-   * Restricted to the user home directory: terminal output drives these reads,
-   * and AI-injected paths must not be a vector for reading e.g. `/etc/passwd`.
-   * Symlinks are resolved before the home-jail check so they can't escape.
+   * Restricted to the user home and OS temp directories (see resolveJailedPath):
+   * terminal output drives these reads, and AI-injected paths must not be a vector
+   * for reading e.g. `/etc/passwd`. Symlinks are resolved before the jail check so
+   * they can't escape.
    */
   async readUserFile(rawPath: string, maxBytes = 1_048_576): Promise<{ content: string }> {
-    const realPath = await resolveHomeJailedPath(rawPath);
+    const realPath = await resolveJailedPath(rawPath);
     const stats = await stat(realPath);
     if (stats.size > maxBytes) {
       throw new Error(`File too large (${stats.size} bytes, max ${maxBytes})`);
@@ -510,12 +549,11 @@ class AppService implements IInitializable, IDisposable {
   async readAudioFileDataUrl(filePath: string): Promise<string> {
     if (!filePath || typeof filePath !== 'string') throw new Error('Invalid audio path');
 
-    const resolvedPath = await realpath(resolve(filePath));
-    const resolvedHome = resolve(homedir());
-    const homePrefix = resolvedHome.endsWith(sep) ? resolvedHome : `${resolvedHome}${sep}`;
-    if (!resolvedPath.startsWith(homePrefix) && resolvedPath !== resolvedHome) {
-      throw new Error('Audio file must be located within the user home directory');
-    }
+    const resolvedPath = await realpath(expandAbsoluteOrTildePath(filePath));
+    await assertWithinJail(
+      resolvedPath,
+      'Audio file must be located within the user home or a temporary directory'
+    );
 
     const extension = extname(filePath).toLowerCase();
     const mimeType = AUDIO_MIME_TYPES[extension];
