@@ -1,6 +1,6 @@
 import { exec } from 'node:child_process';
 import { readFile, realpath, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { app, clipboard, dialog, shell } from 'electron';
@@ -58,14 +58,37 @@ function expandAbsoluteOrTildePath(rawPath: string): string {
   return expanded;
 }
 
-async function resolveHomeJailedPath(rawPath: string): Promise<string> {
+// Reads below are driven by terminal output, so AI-injected paths must not be
+// able to reach arbitrary locations (e.g. `/etc/passwd`). They are jailed to the
+// user home directory plus the OS temp directories, where agents write scratch
+// files: `os.tmpdir()` (→ `/var/folders/…/T` on macOS) and `/tmp` (→ `/private/tmp`).
+const JAIL_ROOT_CANDIDATES = [homedir(), tmpdir(), '/tmp', '/private/tmp'];
+
+// Realpath each candidate so symlinked roots (e.g. macOS `/tmp` → `/private/tmp`)
+// match resolved paths. Missing roots (e.g. `/tmp` on Windows) are dropped.
+async function getJailRoots(): Promise<string[]> {
+  const resolved = await Promise.all(
+    JAIL_ROOT_CANDIDATES.map((candidate) => realpath(candidate).catch(() => null))
+  );
+  return [...new Set(resolved.filter((root): root is string => root !== null))];
+}
+
+function isWithinRoot(realPath: string, root: string): boolean {
+  const rootWithSep = root.endsWith(sep) ? root : root + sep;
+  return realPath === root || realPath.startsWith(rootWithSep);
+}
+
+async function assertWithinJail(realPath: string, errorMessage: string): Promise<void> {
+  const roots = await getJailRoots();
+  if (!roots.some((root) => isWithinRoot(realPath, root))) {
+    throw new Error(errorMessage);
+  }
+}
+
+async function resolveJailedPath(rawPath: string): Promise<string> {
   const expanded = expandAbsoluteOrTildePath(rawPath);
   const realPath = await realpath(expanded);
-  const realHome = await realpath(homedir());
-  const realHomeWithSep = realHome.endsWith(sep) ? realHome : realHome + sep;
-  if (realPath !== realHome && !realPath.startsWith(realHomeWithSep)) {
-    throw new Error('Path must be inside the user home directory');
-  }
+  await assertWithinJail(realPath, 'Path must be inside the user home or a temporary directory');
   return realPath;
 }
 
@@ -206,18 +229,19 @@ class AppService implements IInitializable, IDisposable {
   }
 
   async openPath(rawPath: string): Promise<void> {
-    const realPath = await resolveHomeJailedPath(rawPath);
+    const realPath = await resolveJailedPath(rawPath);
     const errorMessage = await shell.openPath(realPath);
     if (errorMessage) throw new Error(errorMessage);
   }
 
   /**
-   * Restricted to the user home directory: terminal output drives these reads,
-   * and AI-injected paths must not be a vector for reading e.g. `/etc/passwd`.
-   * Symlinks are resolved before the home-jail check so they can't escape.
+   * Restricted to the user home and OS temp directories (see resolveJailedPath):
+   * terminal output drives these reads, and AI-injected paths must not be a vector
+   * for reading e.g. `/etc/passwd`. Symlinks are resolved before the jail check so
+   * they can't escape.
    */
   async readUserFile(rawPath: string, maxBytes = 1_048_576): Promise<{ content: string }> {
-    const realPath = await resolveHomeJailedPath(rawPath);
+    const realPath = await resolveJailedPath(rawPath);
     const stats = await stat(realPath);
     if (stats.size > maxBytes) {
       throw new Error(`File too large (${stats.size} bytes, max ${maxBytes})`);
@@ -511,11 +535,10 @@ class AppService implements IInitializable, IDisposable {
     if (!filePath || typeof filePath !== 'string') throw new Error('Invalid audio path');
 
     const resolvedPath = await realpath(resolve(filePath));
-    const resolvedHome = resolve(homedir());
-    const homePrefix = resolvedHome.endsWith(sep) ? resolvedHome : `${resolvedHome}${sep}`;
-    if (!resolvedPath.startsWith(homePrefix) && resolvedPath !== resolvedHome) {
-      throw new Error('Audio file must be located within the user home directory');
-    }
+    await assertWithinJail(
+      resolvedPath,
+      'Audio file must be located within the user home or a temporary directory'
+    );
 
     const extension = extname(filePath).toLowerCase();
     const mimeType = AUDIO_MIME_TYPES[extension];
