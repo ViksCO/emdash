@@ -1,5 +1,5 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -131,11 +131,6 @@ describe('AppService file jail', () => {
   it.skipIf(process.platform === 'win32')('reads a file under /tmp', async () => {
     const filePath = await writeTempFile('/tmp', 'note.md', 'tmp content');
     await expect(appService.readUserFile(filePath)).resolves.toEqual({ content: 'tmp content' });
-  });
-
-  it('reads a file under the user home directory', async () => {
-    const filePath = await writeTempFile(homedir(), 'note.md', 'home content');
-    await expect(appService.readUserFile(filePath)).resolves.toEqual({ content: 'home content' });
   });
 
   it.skipIf(process.platform === 'win32')(

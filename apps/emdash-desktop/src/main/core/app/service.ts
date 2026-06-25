@@ -1,10 +1,11 @@
 import { exec } from 'node:child_process';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { extname, isAbsolute, join, resolve, sep } from 'node:path';
+import { extname, isAbsolute, join, parse } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { app, clipboard, dialog, shell } from 'electron';
 import { getMainWindow } from '@main/app/window';
+import { isPathInsideRoot } from '@main/core/projects/worktrees/hosts/local-worktree-host';
 import { db } from '@main/db/client';
 import { sshConnections } from '@main/db/schema';
 import { events } from '@main/lib/events';
@@ -64,23 +65,37 @@ function expandAbsoluteOrTildePath(rawPath: string): string {
 // files: `os.tmpdir()` (→ `/var/folders/…/T` on macOS) and `/tmp` (→ `/private/tmp`).
 const JAIL_ROOT_CANDIDATES = [homedir(), tmpdir(), '/tmp', '/private/tmp'];
 
-// Realpath each candidate so symlinked roots (e.g. macOS `/tmp` → `/private/tmp`)
-// match resolved paths. Missing roots (e.g. `/tmp` on Windows) are dropped.
-async function getJailRoots(): Promise<string[]> {
-  const resolved = await Promise.all(
-    JAIL_ROOT_CANDIDATES.map((candidate) => realpath(candidate).catch(() => null))
-  );
-  return [...new Set(resolved.filter((root): root is string => root !== null))];
-}
+let cachedJailRoots: string[] | null = null;
 
-function isWithinRoot(realPath: string, root: string): boolean {
-  const rootWithSep = root.endsWith(sep) ? root : root + sep;
-  return realPath === root || realPath.startsWith(rootWithSep);
+// Realpath each candidate so symlinked roots (e.g. macOS `/tmp` → `/private/tmp`)
+// match resolved paths. A candidate that doesn't exist on this platform (e.g. `/tmp`
+// on Windows) is dropped; any other realpath failure is transient and re-thrown
+// rather than silently shrinking the jail. A candidate resolving to the filesystem
+// root is dropped too — it would make every absolute path "inside" and collapse the
+// jail. Roots are process-constant, so the resolved set is computed once and cached.
+async function getJailRoots(): Promise<string[]> {
+  if (cachedJailRoots) return cachedJailRoots;
+  const resolved = await Promise.all(
+    JAIL_ROOT_CANDIDATES.map(async (candidate) => {
+      try {
+        return await realpath(candidate);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
+      }
+    })
+  );
+  cachedJailRoots = [
+    ...new Set(
+      resolved.filter((root): root is string => root !== null && parse(root).root !== root)
+    ),
+  ];
+  return cachedJailRoots;
 }
 
 async function assertWithinJail(realPath: string, errorMessage: string): Promise<void> {
   const roots = await getJailRoots();
-  if (!roots.some((root) => isWithinRoot(realPath, root))) {
+  if (!roots.some((root) => isPathInsideRoot(realPath, root))) {
     throw new Error(errorMessage);
   }
 }
@@ -534,7 +549,7 @@ class AppService implements IInitializable, IDisposable {
   async readAudioFileDataUrl(filePath: string): Promise<string> {
     if (!filePath || typeof filePath !== 'string') throw new Error('Invalid audio path');
 
-    const resolvedPath = await realpath(resolve(filePath));
+    const resolvedPath = await realpath(expandAbsoluteOrTildePath(filePath));
     await assertWithinJail(
       resolvedPath,
       'Audio file must be located within the user home or a temporary directory'
