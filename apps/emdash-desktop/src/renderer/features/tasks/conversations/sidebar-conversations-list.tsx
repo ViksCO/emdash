@@ -52,6 +52,7 @@ const ConversationRow = observer(function ConversationRow({
   if (!conversation) return null;
 
   const isActive = tabManager.activeConversationId === conversationId;
+  const hasTab = tabManager.hasConversationTab(conversationId);
   const displayTitle = formatConversationTitleForDisplay(
     conversation.data.providerId,
     conversation.data.title
@@ -113,10 +114,16 @@ const ConversationRow = observer(function ConversationRow({
             }
           }}
           className={cn(
-            'group flex w-full items-center gap-2 h-8 rounded-md px-2 text-left text-sm text-foreground-muted transition-colors hover:bg-background-1 hover:text-foreground',
+            'group relative flex w-full items-center gap-2 h-8 rounded-md px-2 text-left text-sm text-foreground-muted transition-colors hover:bg-background-1 hover:text-foreground',
             isActive && 'bg-background-2 text-foreground hover:bg-background-2'
           )}
         >
+          {hasTab && (
+            <span
+              aria-hidden
+              className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-foreground/40"
+            />
+          )}
           <AgentIcon id={conversation.data.providerId} size={16} className="size-4" />
           {isEditing ? (
             <input
