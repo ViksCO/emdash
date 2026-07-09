@@ -18,8 +18,9 @@ interface FileRendererProps {
  * Routes a file tab to the correct renderer based on its current renderer kind.
  *
  * Monaco is kept alive via ShowHide so cursor position and scroll survive
- * renderer-kind transitions (e.g. toggling svg-source ↔ svg). All preview
- * renderers, including markdown, mount/unmount freely and hold no persistent state.
+ * renderer-kind transitions (e.g. toggling svg-source ↔ svg). Preview renderers
+ * still mount/unmount freely and hold no editor state, but their scroll position is
+ * preserved across remounts via useScrollRestoration (keyed by tab store + path).
  */
 export const FileRenderer = observer(function FileRenderer({ tab }: FileRendererProps) {
   const kind = tab.renderer.kind;
@@ -44,9 +45,9 @@ export const FileRenderer = observer(function FileRenderer({ tab }: FileRenderer
 function BinaryOrPreviewRenderer({ tab }: FileRendererProps) {
   switch (tab.renderer.kind) {
     case 'markdown':
-      return <MarkdownEditorRenderer filePath={tab.path} />;
+      return <MarkdownEditorRenderer tab={tab} />;
     case 'svg':
-      return <SvgRenderer filePath={tab.path} />;
+      return <SvgRenderer tab={tab} />;
     case 'html':
       return <HtmlRenderer filePath={tab.path} />;
     case 'image':

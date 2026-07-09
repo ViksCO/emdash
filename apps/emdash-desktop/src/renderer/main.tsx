@@ -9,6 +9,7 @@ import { setupViewCommandProvider } from '@renderer/lib/commands/registry';
 import { wireCommitHistoryInvalidation } from '@renderer/lib/commit-history-invalidation';
 import { wireExternalLinkRequests } from '@renderer/lib/external-link-requests';
 import { rpc } from '@renderer/lib/ipc';
+import { editorViewStatePersistence } from '@renderer/lib/monaco/editor-view-state-persistence';
 import { wireModelRegistryInvalidation } from '@renderer/lib/monaco/invalidation-bridges';
 import { codeEditorPool } from '@renderer/lib/monaco/monaco-code-pool';
 import { diffEditorPool } from '@renderer/lib/monaco/monaco-diff-pool';
@@ -51,6 +52,12 @@ async function bootstrap() {
   ]);
 
   viewStateCache.populate(allViewState as Record<string, unknown>);
+  // Seed cross-restart editor scroll/cursor before any file model is registered.
+  // `editor-view-state` is owned by editorViewStatePersistence — live updates flow
+  // through it, not viewStateCache, so don't read this key back from viewStateCache.
+  editorViewStatePersistence.hydrate(
+    (allViewState as Record<string, unknown>)['editor-view-state']
+  );
 
   setupNavigationGuards();
   if (navResult) appState.navigation.restoreSnapshot(navResult);

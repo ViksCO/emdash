@@ -1,5 +1,5 @@
 import { observer } from 'mobx-react-lite';
-import { useEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import { useEditorContext } from '@renderer/features/tasks/editor/editor-provider';
 import { useTabGroupContext } from '@renderer/features/tasks/tabs/tab-group-context';
 import type { FileRendererData } from '@renderer/features/tasks/types';
@@ -25,12 +25,31 @@ const SOURCE_TO_PREVIEW = {
  * inside TabGroupProvider — this component only manages the host attachment point.
  */
 export const MonacoFileRenderer = observer(function MonacoFileRenderer() {
-  const { setEditorHost, triggerLayout } = useEditorContext();
+  const { setEditorHost, triggerLayout, restoreActiveViewState } = useEditorContext();
+  const { tabManager } = useTabGroupContext();
 
-  // Re-run Monaco layout whenever this component transitions to visible.
-  useEffect(() => {
-    triggerLayout();
-  }, [triggerLayout]);
+  // This host renders the active tab; its renderer kind tells us whether Monaco is
+  // the visible view (vs. a preview renderer shown in its place).
+  // NOTE: this source/text kind set must stay in sync with `monacoActive` in
+  // file-renderer.tsx — both decide whether Monaco is the shown view; a mismatch
+  // means shown-but-not-restored (or vice versa).
+  // TODO(ADE-5): extract a shared isMonacoSourceKind() predicate so it lives once.
+  const kind = tabManager.activeFileEntry?.renderer.kind;
+  const monacoVisible =
+    kind === 'text' ||
+    kind === 'svg-source' ||
+    kind === 'html-source' ||
+    kind === 'markdown-source';
+
+  // Restore scroll + cursor when Monaco becomes the visible view after a
+  // preview→source toggle (same model, so attach() never fires). Saving happens
+  // continuously in EditorProvider; tab switches restore via attach().
+  useLayoutEffect(() => {
+    if (monacoVisible) {
+      triggerLayout();
+      restoreActiveViewState();
+    }
+  }, [monacoVisible, triggerLayout, restoreActiveViewState]);
 
   return (
     <div className="relative h-full w-full">
