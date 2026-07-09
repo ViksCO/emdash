@@ -1,22 +1,28 @@
 import { Eye, Pencil } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useMemo } from 'react';
+import type { FileTabStore } from '@renderer/features/tasks/tabs/file-tab-store';
 import { useWorkspaceViewModel } from '@renderer/features/tasks/task-view-context';
+import { useScrollRestoration } from '@renderer/lib/hooks/use-scroll-restoration';
 import { modelRegistry } from '@renderer/lib/monaco/monaco-model-registry';
 import { buildMonacoModelPath } from '@renderer/lib/monaco/monacoModelPath';
 import { ContainedImage } from '@renderer/lib/ui/contained-image';
 import { ToggleGroup, ToggleGroupItem } from '@renderer/lib/ui/toggle-group';
 
 interface SvgRendererProps {
-  filePath: string;
+  tab: FileTabStore;
 }
 
 /**
  * Renders an SVG file as an image.
  */
-export const SvgRenderer = observer(function SvgRenderer({ filePath }: SvgRendererProps) {
+export const SvgRenderer = observer(function SvgRenderer({ tab }: SvgRendererProps) {
   const taskView = useWorkspaceViewModel();
   const { editorView, tabManager } = taskView;
+  // `tab` is the pane-local store passed by FileRenderer — do NOT re-derive it from
+  // the (focused-pane) tabManager, which resolves the wrong pane in split view.
+  const filePath = tab.path;
+  const scrollRef = useScrollRestoration<HTMLDivElement>(tab, filePath);
   const bufferUri = buildMonacoModelPath(editorView.modelRootPath, filePath);
 
   // Touch bufferVersions so this observer re-renders when the buffer is first
@@ -30,7 +36,10 @@ export const SvgRenderer = observer(function SvgRenderer({ filePath }: SvgRender
   const fileName = filePath.split('/').pop() ?? filePath;
 
   return (
-    <div className="relative flex h-full items-center justify-center overflow-auto p-4">
+    <div
+      ref={scrollRef}
+      className="relative flex h-full items-center justify-center overflow-auto p-4"
+    >
       {svgUrl ? (
         <ContainedImage src={svgUrl} alt={fileName} className="max-h-full max-w-full" />
       ) : (

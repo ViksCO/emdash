@@ -8,6 +8,7 @@ import {
   useWorkspaceViewModel,
 } from '@renderer/features/tasks/task-view-context';
 import { useDelayedBoolean } from '@renderer/lib/hooks/use-delay-boolean';
+import { useScrollRestoration } from '@renderer/lib/hooks/use-scroll-restoration';
 import { rpc } from '@renderer/lib/ipc';
 import { modelRegistry } from '@renderer/lib/monaco/monaco-model-registry';
 import { buildMonacoModelPath } from '@renderer/lib/monaco/monacoModelPath';
@@ -16,7 +17,7 @@ import { Spinner } from '@renderer/lib/ui/spinner';
 import { ToggleGroup, ToggleGroupItem } from '@renderer/lib/ui/toggle-group';
 
 interface MarkdownEditorRendererProps {
-  filePath: string;
+  tab: FileTabStore;
 }
 
 /**
@@ -24,16 +25,17 @@ interface MarkdownEditorRendererProps {
  * A floating "Edit source" button in the top-right corner toggles to Monaco source view.
  */
 export const MarkdownEditorRenderer = observer(function MarkdownEditorRenderer({
-  filePath,
+  tab,
 }: MarkdownEditorRendererProps) {
   const { projectId } = useTaskViewContext();
   const workspaceId = useWorkspaceId();
   const taskView = useWorkspaceViewModel();
   const { editorView, tabManager } = taskView;
-  const tab = Array.from(tabManager.entries.values()).find(
-    (entry): entry is FileTabStore => entry.kind === 'file' && entry.path === filePath
-  );
-  const showExternalSpinner = useDelayedBoolean(!!(tab?.isExternal && tab.isLoading), 200);
+  // `tab` is the pane-local store passed by FileRenderer — do NOT re-derive it from
+  // the (focused-pane) tabManager, which resolves the wrong pane in split view.
+  const filePath = tab.path;
+  const showExternalSpinner = useDelayedBoolean(!!(tab.isExternal && tab.isLoading), 200);
+  const scrollRef = useScrollRestoration<HTMLDivElement>(tab, filePath);
   const bufferUri = tab?.isExternal ? '' : buildMonacoModelPath(editorView.modelRootPath, filePath);
   // Reading bufferVersions creates a MobX tracking dependency so this observer()
   // component re-renders whenever the buffer content changes or is first populated.
@@ -52,7 +54,7 @@ export const MarkdownEditorRenderer = observer(function MarkdownEditorRenderer({
   );
 
   return (
-    <div className="relative h-full overflow-y-auto bg-background-secondary-1">
+    <div ref={scrollRef} className="relative h-full overflow-y-auto bg-background-secondary-1">
       {tab?.isExternal ? null : (
         <ToggleGroup
           value={['markdown']}

@@ -580,7 +580,15 @@ export class MonacoModelRegistry {
    * Saves view state for `previousUri` and restores it for `newUri`.
    */
   attach(editor: monaco.editor.IStandaloneCodeEditor, newUri: string, previousUri?: string): void {
-    if (previousUri && previousUri !== newUri) {
+    // Only capture/restore view state while the editor is genuinely on screen.
+    // getLayoutInfo().height floors at Monaco's 5px when hidden (never 0), so it
+    // can't gate this — use the DOM container's real clientHeight, which is 0 when
+    // the host is display:none / detached (where automaticLayout has clamped scroll).
+    // TODO(ADE-5): viewState is stored once per URI in this shared registry, so two
+    // split panes showing the same file clobber each other's scroll (last writer
+    // wins). Key per (pane, URI) if split-same-file becomes common.
+    const onScreen = editor.getContainerDomNode().clientHeight > 0;
+    if (previousUri && previousUri !== newUri && onScreen) {
       const prev = this.modelMap.get(previousUri);
       if (prev?.type === 'buffer') prev.viewState = editor.saveViewState();
     }
@@ -588,9 +596,32 @@ export class MonacoModelRegistry {
     const entry = this.modelMap.get(newUri);
     if (entry?.type === 'buffer') {
       editor.setModel(entry.model);
-      if (entry.viewState) {
+      // For the recreated-editor case (task switch) the renderer re-runs the restore
+      // after layout, so a 0-height skip here is recovered.
+      if (entry.viewState && onScreen) {
         editor.restoreViewState(entry.viewState);
       }
+    }
+  }
+
+  /**
+   * Save the editor's view state (scroll + cursor) for `uri` without switching
+   * models. Used to preserve scroll across the in-tab preview↔source toggle, which
+   * keeps the same model (so {@link attach} never fires) but hides the editor —
+   * `automaticLayout` would otherwise clamp scrollTop to 0 while it has no height.
+   */
+  saveViewState(uri: string, editor: monaco.editor.IStandaloneCodeEditor): void {
+    const entry = this.modelMap.get(uri);
+    if (entry?.type === 'buffer') entry.viewState = editor.saveViewState();
+  }
+
+  /** Restore the view state previously saved for `uri`, if any. */
+  restoreViewState(uri: string, editor: monaco.editor.IStandaloneCodeEditor): void {
+    const entry = this.modelMap.get(uri);
+    // Guard against a stale async restore: only apply if the editor is still showing
+    // this URI's model (a rapid switch could have swapped the model underneath us).
+    if (entry?.type === 'buffer' && entry.viewState && editor.getModel() === entry.model) {
+      editor.restoreViewState(entry.viewState);
     }
   }
 
