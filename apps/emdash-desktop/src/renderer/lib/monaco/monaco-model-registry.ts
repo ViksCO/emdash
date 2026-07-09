@@ -2,9 +2,25 @@ import { observable, runInAction } from 'mobx';
 import type * as monaco from 'monaco-editor';
 import { rpc } from '@renderer/lib/ipc';
 import { gitRefToString, HEAD_REF, refsEqual, type GitRef } from '@shared/core/git/git';
+import { editorViewStatePersistence } from './editor-view-state-persistence';
 import { buildMonacoModelPath } from './monacoModelPath';
 
 const BUFFER_DEBOUNCE_MS = 2000;
+
+/**
+ * Apply a (possibly persisted / cross-version-stale) Monaco view state, tolerating a
+ * shape mismatch so a bad stored blob can never crash restore.
+ */
+function applyViewState(
+  editor: monaco.editor.IStandaloneCodeEditor,
+  viewState: monaco.editor.ICodeEditorViewState
+): void {
+  try {
+    editor.restoreViewState(viewState);
+  } catch {
+    // Stale/corrupt persisted view state — ignore.
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Discriminated-union entry types
@@ -445,7 +461,9 @@ export class MonacoModelRegistry {
         workspaceId,
         filePath,
         language,
-        viewState: null,
+        // Seed from cross-restart persistence so a reopened file restores its
+        // scroll/cursor; null when nothing was saved for this buffer.
+        viewState: editorViewStatePersistence.get(uri),
       };
       this.modelMap.set(uri, entry);
 
@@ -590,7 +608,10 @@ export class MonacoModelRegistry {
     const onScreen = editor.getContainerDomNode().clientHeight > 0;
     if (previousUri && previousUri !== newUri && onScreen) {
       const prev = this.modelMap.get(previousUri);
-      if (prev?.type === 'buffer') prev.viewState = editor.saveViewState();
+      if (prev?.type === 'buffer') {
+        prev.viewState = editor.saveViewState();
+        editorViewStatePersistence.set(previousUri, prev.viewState);
+      }
     }
 
     const entry = this.modelMap.get(newUri);
@@ -599,7 +620,7 @@ export class MonacoModelRegistry {
       // For the recreated-editor case (task switch) the renderer re-runs the restore
       // after layout, so a 0-height skip here is recovered.
       if (entry.viewState && onScreen) {
-        editor.restoreViewState(entry.viewState);
+        applyViewState(editor, entry.viewState);
       }
     }
   }
@@ -612,7 +633,10 @@ export class MonacoModelRegistry {
    */
   saveViewState(uri: string, editor: monaco.editor.IStandaloneCodeEditor): void {
     const entry = this.modelMap.get(uri);
-    if (entry?.type === 'buffer') entry.viewState = editor.saveViewState();
+    if (entry?.type === 'buffer') {
+      entry.viewState = editor.saveViewState();
+      editorViewStatePersistence.set(uri, entry.viewState);
+    }
   }
 
   /** Restore the view state previously saved for `uri`, if any. */
@@ -621,7 +645,7 @@ export class MonacoModelRegistry {
     // Guard against a stale async restore: only apply if the editor is still showing
     // this URI's model (a rapid switch could have swapped the model underneath us).
     if (entry?.type === 'buffer' && entry.viewState && editor.getModel() === entry.model) {
-      editor.restoreViewState(entry.viewState);
+      applyViewState(editor, entry.viewState);
     }
   }
 
