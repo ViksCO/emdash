@@ -30,7 +30,9 @@ export function FilePeekModal({ absPath }: BaseModalProps<void> & FilePeekModalA
           </DialogDescription>
         </div>
       </DialogHeader>
-      <div className="min-h-0 flex-1 overflow-auto border-t border-foreground/10">
+      {/* Fixed height so the panel opens at full size — content loads into it
+          rather than growing the modal (which read as a flash-then-expand). */}
+      <div className="h-[72vh] overflow-auto border-t border-foreground/10">
         <FilePreview absPath={absPath} effectiveTheme={effectiveTheme} />
       </div>
       <div className="flex shrink-0 items-center justify-between gap-4 border-t border-foreground/10 px-3 py-2">

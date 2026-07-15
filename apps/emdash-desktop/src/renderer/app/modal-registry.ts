@@ -24,7 +24,7 @@ import { GithubDeviceFlowModal } from '@renderer/lib/components/github-device-fl
 import { UnsavedChangesDialog } from '@renderer/lib/components/unsaved-changes-dialog';
 import { type ModalComponent } from '@renderer/lib/modal/modal-provider';
 
-export type ModalSize = 'xs' | 'sm' | 'md' | 'lg';
+export type ModalSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 export type ModalPosition = 'center' | 'top';
 
 export type ModalRegistryEntry<TProps = unknown, TResult = unknown> = {
@@ -42,7 +42,7 @@ export function createModal<TProps, TResult>(
 
 export const modalRegistry = {
   commandPaletteModal: createModal(CommandPaletteModal, { size: 'md' }),
-  filePeekModal: createModal(FilePeekModal, { size: 'lg' }),
+  filePeekModal: createModal(FilePeekModal, { size: 'xl' }),
   taskModal: createModal(CreateTaskModal),
   addProjectModal: createModal(AddProjectModal),
   addSshConnModal: createModal(AddSshConnModal),

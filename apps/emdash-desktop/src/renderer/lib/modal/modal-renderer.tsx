@@ -17,6 +17,7 @@ const SIZE_CLASSES: Record<ModalSize, string> = {
   sm: 'sm:max-w-sm',
   md: 'sm:max-w-lg',
   lg: 'sm:max-w-2xl',
+  xl: 'sm:max-w-6xl',
 };
 
 const POSITION_CLASSES: Record<ModalPosition, string> = {

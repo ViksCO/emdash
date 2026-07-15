@@ -96,7 +96,7 @@ export function FilePreview({
 
   if (state.status === 'loading') {
     return (
-      <div className="flex min-h-[200px] items-center justify-center">
+      <div className="flex h-full min-h-[200px] items-center justify-center">
         {showSpinner ? <Spinner /> : null}
       </div>
     );
@@ -104,7 +104,7 @@ export function FilePreview({
 
   if (state.status === 'unsupported' || state.status === 'error') {
     return (
-      <div className="flex min-h-[200px] flex-col items-center justify-center px-6 py-10 text-center">
+      <div className="flex h-full min-h-[200px] flex-col items-center justify-center px-6 py-10 text-center">
         <p className="text-sm text-foreground-tertiary">
           {state.status === 'error'
             ? 'Couldn’t open this file.'
@@ -116,13 +116,17 @@ export function FilePreview({
 
   if (state.status === 'markdown') {
     return (
-      <MarkdownRenderer content={state.content} variant="full" className="max-w-3xl px-6 py-4" />
+      <MarkdownRenderer
+        content={state.content}
+        variant="full"
+        className="mx-auto max-w-3xl px-6 py-4"
+      />
     );
   }
 
   if (state.status === 'highlighted') {
     return (
-      <div style={{ background: 'var(--monaco-bg, transparent)' }}>
+      <div className="min-h-full" style={{ background: 'var(--monaco-bg, transparent)' }}>
         <pre
           className={CODE_PRE_CLASS}
           style={{ color: 'var(--monaco-fg)' }}
@@ -133,7 +137,7 @@ export function FilePreview({
   }
 
   return (
-    <div style={{ background: 'var(--monaco-bg, transparent)' }}>
+    <div className="min-h-full" style={{ background: 'var(--monaco-bg, transparent)' }}>
       <pre className={CODE_PRE_CLASS} style={{ color: 'var(--monaco-fg)' }}>
         {state.content}
       </pre>
