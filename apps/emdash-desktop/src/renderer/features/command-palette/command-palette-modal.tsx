@@ -3,6 +3,7 @@ import { Command } from 'cmdk';
 import { Activity, FolderOpen, GitBranch, MessageSquare, type LucideIcon } from 'lucide-react';
 import { useObserver } from 'mobx-react-lite';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { getProjectStore } from '@renderer/features/projects/stores/project-selectors';
 import { useAppSettingsKey } from '@renderer/features/settings/use-app-settings-key';
 import { conversationRegistry } from '@renderer/features/tasks/stores/conversation-registry';
 import { getTaskStore, getTaskView } from '@renderer/features/tasks/stores/task-selectors';
@@ -71,8 +72,7 @@ const TASK_SUGGESTED = [
 const PROJECT_SUGGESTED = ['app.newTask', 'app.settings', 'resource-monitor', 'app.giveFeedback'];
 const APP_SUGGESTED = ['app.newProject', 'app.settings', 'resource-monitor', 'app.giveFeedback'];
 
-// Roots scanned for cross-repo file peeks. A configurable setting is a follow-up.
-const DEFAULT_PEEK_ROOTS = ['~/WebstormProjects'];
+// Max peek file hits shown in the palette.
 const PEEK_LIMIT = 8;
 
 function PaletteItem({
@@ -179,18 +179,27 @@ export function CommandPaletteModal({
 
   const openPeek = useShowModal('filePeekModal');
 
-  // Cross-repo file matches, opened read-only in the peek modal (no navigation).
-  // Gated at >= 3 chars to match the db search and defer the first cross-repo crawl.
+  // Peek is scoped to the current project's local repo. Reaching other repos
+  // (search a chosen/tagged repo) is owned by the ADE-7 @-scope chip; when that
+  // lands, this should follow the chip's effective project instead of `projectId`.
+  const peekRepoPath = useObserver(() => {
+    if (!projectId) return undefined;
+    const data = getProjectStore(projectId)?.data;
+    return data?.type === 'local' ? data.path : undefined;
+  });
+
+  // Files in the current repo, opened read-only in the peek modal (no navigation).
+  // Gated at >= 3 chars to match the db search.
   const { data: peekHits = [], isFetching: peekFetching } = useQuery({
-    queryKey: ['cmdk-peek', debouncedQuery],
+    queryKey: ['cmdk-peek', debouncedQuery, peekRepoPath],
     queryFn: () =>
       rpc.peek.searchFiles({
         query: debouncedQuery,
-        options: { roots: DEFAULT_PEEK_ROOTS, limit: PEEK_LIMIT },
+        options: { roots: peekRepoPath ? [peekRepoPath] : [], limit: PEEK_LIMIT },
       }),
     staleTime: 5_000,
     placeholderData: (prev) => prev,
-    enabled: debouncedQuery.length >= 3,
+    enabled: !!peekRepoPath && debouncedQuery.length >= 3,
   });
 
   // Opening the peek replaces the palette (single active modal). setModal would
