@@ -18,6 +18,7 @@ import { jiraController } from './core/jira/controller';
 import { linearController } from './core/linear/controller';
 import { mcpController } from './core/mcp/controller';
 import { mondayController } from './core/monday/controller';
+import { peekController } from './core/peek/controller';
 import { plainController } from './core/plain/controller';
 import { planeController } from './core/plane/controller';
 import { projectController } from './core/projects/controller';
@@ -77,6 +78,7 @@ export const rpcRouter = createRPCRouter({
   pullRequests: pullRequestController,
   viewState: viewStateController,
   search: searchController,
+  peek: peekController,
   projectSettings: projectSettingsController,
   workspace: createRPCNamespace({
     git: gitController,
