@@ -61,13 +61,11 @@ describe('FilePreview (read-only peek render)', () => {
     await expect.element(screen.getByText('Peek Heading')).toBeVisible();
   });
 
-  it('offers open-externally for images instead of rendering bytes', async () => {
+  it('shows an unsupported message for images instead of rendering bytes', async () => {
     const screen = await renderWithTheme(
       <FilePreview absPath="/repo/logo.png" effectiveTheme="emdark" />
     );
-    await expect
-      .element(screen.getByRole('button', { name: /open in default app/i }))
-      .toBeVisible();
+    await expect.element(screen.getByText(/can.t preview this file type/i)).toBeVisible();
   });
 
   it('treats a NUL-containing "text" file as binary rather than rendering mojibake', async () => {
@@ -76,17 +74,13 @@ describe('FilePreview (read-only peek render)', () => {
     const screen = await renderWithTheme(
       <FilePreview absPath="/repo/fake.ts" effectiveTheme="emdark" />
     );
-    await expect
-      .element(screen.getByRole('button', { name: /open in default app/i }))
-      .toBeVisible();
+    await expect.element(screen.getByText(/can.t preview this file type/i)).toBeVisible();
   });
 
-  it('shows an error with a fallback when the file cannot be read', async () => {
+  it('shows an error message when the file cannot be read', async () => {
     const screen = await renderWithTheme(
       <FilePreview absPath="/repo/missing.ts" effectiveTheme="emdark" />
     );
-    await expect
-      .element(screen.getByRole('button', { name: /open in default app/i }))
-      .toBeVisible();
+    await expect.element(screen.getByText(/couldn.t open this file/i)).toBeVisible();
   });
 });

@@ -3,7 +3,6 @@ import { colorizeToHtml } from '@renderer/lib/editor/code-colorizer';
 import { getFileKind } from '@renderer/lib/editor/fileKind';
 import { useDelayedBoolean } from '@renderer/lib/hooks/use-delay-boolean';
 import { rpc } from '@renderer/lib/ipc';
-import { Button } from '@renderer/lib/ui/button';
 import { MarkdownRenderer } from '@renderer/lib/ui/markdown-renderer';
 import { Spinner } from '@renderer/lib/ui/spinner';
 
@@ -105,13 +104,12 @@ export function FilePreview({
 
   if (state.status === 'unsupported' || state.status === 'error') {
     return (
-      <div className="flex min-h-[200px] flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+      <div className="flex min-h-[200px] flex-col items-center justify-center px-6 py-10 text-center">
         <p className="text-sm text-foreground-tertiary">
-          {state.status === 'error' ? state.message : 'This file type can’t be previewed here.'}
+          {state.status === 'error'
+            ? 'Couldn’t open this file.'
+            : 'Can’t preview this file type — use “Open externally” below.'}
         </p>
-        <Button variant="outline" size="sm" onClick={() => void rpc.app.openPath(absPath)}>
-          Open in default app
-        </Button>
       </div>
     );
   }

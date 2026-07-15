@@ -3,10 +3,13 @@ import { Command } from 'cmdk';
 import { Activity, FolderOpen, GitBranch, MessageSquare, type LucideIcon } from 'lucide-react';
 import { useObserver } from 'mobx-react-lite';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { getProjectStore } from '@renderer/features/projects/stores/project-selectors';
 import { useAppSettingsKey } from '@renderer/features/settings/use-app-settings-key';
 import { conversationRegistry } from '@renderer/features/tasks/stores/conversation-registry';
-import { getTaskStore, getTaskView } from '@renderer/features/tasks/stores/task-selectors';
+import {
+  getTaskStore,
+  getTaskView,
+  getWorkspaceForTask,
+} from '@renderer/features/tasks/stores/task-selectors';
 import { commandRegistry } from '@renderer/lib/commands/registry';
 import { FileIcon } from '@renderer/lib/editor/file-icon';
 import { useDebounce } from '@renderer/lib/hooks/useDebounce';
@@ -71,9 +74,6 @@ const TASK_SUGGESTED = [
 ];
 const PROJECT_SUGGESTED = ['app.newTask', 'app.settings', 'resource-monitor', 'app.giveFeedback'];
 const APP_SUGGESTED = ['app.newProject', 'app.settings', 'resource-monitor', 'app.giveFeedback'];
-
-// Max peek file hits shown in the palette.
-const PEEK_LIMIT = 8;
 
 function PaletteItem({
   value,
@@ -178,37 +178,31 @@ export function CommandPaletteModal({
   });
 
   const openPeek = useShowModal('filePeekModal');
+  // cmdk's currently-highlighted item value (for ⌘Enter to act on the selection).
+  const [selectedValue, setSelectedValue] = useState('');
 
-  // Peek is scoped to the current project's local repo. Reaching other repos
-  // (search a chosen/tagged repo) is owned by the ADE-7 @-scope chip; when that
-  // lands, this should follow the chip's effective project instead of `projectId`.
-  const peekRepoPath = useObserver(() => {
-    if (!projectId) return undefined;
-    const data = getProjectStore(projectId)?.data;
-    return data?.type === 'local' ? data.path : undefined;
-  });
-
-  // Files in the current repo, opened read-only in the peek modal (no navigation).
-  // Gated at >= 3 chars to match the db search.
-  const { data: peekHits = [], isFetching: peekFetching } = useQuery({
-    queryKey: ['cmdk-peek', debouncedQuery, peekRepoPath],
-    queryFn: () =>
-      rpc.peek.searchFiles({
-        query: debouncedQuery,
-        options: { roots: peekRepoPath ? [peekRepoPath] : [], limit: PEEK_LIMIT },
-      }),
-    staleTime: 5_000,
-    placeholderData: (prev) => prev,
-    enabled: !!peekRepoPath && debouncedQuery.length >= 3,
-  });
-
-  // Opening the peek replaces the palette (single active modal). setModal would
-  // capture the palette's own input as previousFocus; preserve the pre-palette
-  // target so focus returns there when the peek closes.
+  // Open a file read-only in the peek modal, replacing the palette (single active
+  // modal). setModal would capture the palette's own input as previousFocus, so
+  // preserve the pre-palette target to restore focus when the peek closes.
   const handlePeek = (absPath: string) => {
     const preFocus = modalStore.previousFocus;
     openPeek({ absPath });
     modalStore.previousFocus = preFocus;
+  };
+
+  // ⌘/Ctrl+Enter peeks the highlighted file result read-only; plain Enter still
+  // opens it in the editor. Values are compared case-insensitively (cmdk lowercases).
+  const handlePeekShortcut = (e: React.KeyboardEvent) => {
+    if (!(e.metaKey || e.ctrlKey) || e.key !== 'Enter') return;
+    const file = rankedDb.find(
+      (r) => r.kind === 'file' && `file:${r.id}`.toLowerCase() === selectedValue.toLowerCase()
+    );
+    if (!file?.projectId || !file?.taskId) return;
+    const workspace = getWorkspaceForTask(file.projectId, file.taskId);
+    if (!workspace?.path) return;
+    e.preventDefault();
+    e.stopPropagation();
+    handlePeek(`${workspace.path}/${file.id}`);
   };
 
   const registryActions = useObserver((): PaletteAction[] =>
@@ -339,7 +333,14 @@ export function CommandPaletteModal({
   }
 
   return (
-    <Command className="flex flex-col overflow-hidden" shouldFilter={false} loop>
+    <Command
+      className="flex flex-col overflow-hidden"
+      shouldFilter={false}
+      loop
+      value={selectedValue}
+      onValueChange={setSelectedValue}
+      onKeyDown={handlePeekShortcut}
+    >
       <div className="border-b border-foreground/10 px-1">
         <Command.Input
           value={query}
@@ -352,11 +353,9 @@ export function CommandPaletteModal({
       <Command.List className="h-96 overflow-y-auto p-1">
         {query ? (
           <>
-            {!peekFetching && (
-              <Command.Empty className="py-8 text-center text-sm text-foreground/40">
-                No results for &ldquo;{query}&rdquo;
-              </Command.Empty>
-            )}
+            <Command.Empty className="py-8 text-center text-sm text-foreground/40">
+              No results for &ldquo;{query}&rdquo;
+            </Command.Empty>
             {matchedResourceMonitor && (
               <PaletteItem
                 value={matchedResourceMonitor.id}
@@ -443,29 +442,6 @@ export function CommandPaletteModal({
                 />
               );
             })}
-            {debouncedQuery.length >= 3 && peekFetching && peekHits.length === 0 && (
-              <div className="px-2 py-1.5 text-xs text-foreground/40">Searching files…</div>
-            )}
-            {debouncedQuery.length >= 3 && peekHits.length > 0 && (
-              <Command.Group heading="Files" className={GROUP_CLASS}>
-                {peekHits.map((hit) => (
-                  <PaletteFileItem
-                    key={`peek:${hit.absPath}`}
-                    value={`peek:${hit.absPath}`}
-                    item={{
-                      kind: 'peek',
-                      id: hit.absPath,
-                      title: hit.name,
-                      subtitle: `${hit.repoName} · ${hit.relPath}`,
-                      projectId: null,
-                      taskId: null,
-                      score: 0,
-                    }}
-                    onSelect={() => handlePeek(hit.absPath)}
-                  />
-                ))}
-              </Command.Group>
-            )}
           </>
         ) : (
           <>
