@@ -12,7 +12,8 @@ import { useDebounce } from '@renderer/lib/hooks/useDebounce';
 import { getEffectiveHotkey } from '@renderer/lib/hooks/useKeyboardShortcuts';
 import { rpc } from '@renderer/lib/ipc';
 import { useNavigate } from '@renderer/lib/layout/navigation-provider';
-import { type BaseModalProps } from '@renderer/lib/modal/modal-provider';
+import { type BaseModalProps, useShowModal } from '@renderer/lib/modal/modal-provider';
+import { modalStore } from '@renderer/lib/modal/modal-store';
 import { appState } from '@renderer/lib/stores/app-state';
 import { Shortcut } from '@renderer/lib/ui/shortcut';
 import { cn } from '@renderer/utils/utils';
@@ -69,6 +70,10 @@ const TASK_SUGGESTED = [
 ];
 const PROJECT_SUGGESTED = ['app.newTask', 'app.settings', 'resource-monitor', 'app.giveFeedback'];
 const APP_SUGGESTED = ['app.newProject', 'app.settings', 'resource-monitor', 'app.giveFeedback'];
+
+// Roots scanned for cross-repo file peeks. A configurable setting is a follow-up.
+const DEFAULT_PEEK_ROOTS = ['~/WebstormProjects'];
+const PEEK_LIMIT = 8;
 
 function PaletteItem({
   value,
@@ -171,6 +176,31 @@ export function CommandPaletteModal({
     // Skip FTS queries that the trigram tokenizer would reject (< 3 chars).
     enabled: debouncedQuery.length === 0 || debouncedQuery.length >= 3,
   });
+
+  const openPeek = useShowModal('filePeekModal');
+
+  // Cross-repo file matches, opened read-only in the peek modal (no navigation).
+  // Gated at >= 3 chars to match the db search and defer the first cross-repo crawl.
+  const { data: peekHits = [], isFetching: peekFetching } = useQuery({
+    queryKey: ['cmdk-peek', debouncedQuery],
+    queryFn: () =>
+      rpc.peek.searchFiles({
+        query: debouncedQuery,
+        options: { roots: DEFAULT_PEEK_ROOTS, limit: PEEK_LIMIT },
+      }),
+    staleTime: 5_000,
+    placeholderData: (prev) => prev,
+    enabled: debouncedQuery.length >= 3,
+  });
+
+  // Opening the peek replaces the palette (single active modal). setModal would
+  // capture the palette's own input as previousFocus; preserve the pre-palette
+  // target so focus returns there when the peek closes.
+  const handlePeek = (absPath: string) => {
+    const preFocus = modalStore.previousFocus;
+    openPeek({ absPath });
+    modalStore.previousFocus = preFocus;
+  };
 
   const registryActions = useObserver((): PaletteAction[] =>
     commandRegistry.activeCommands
@@ -313,9 +343,11 @@ export function CommandPaletteModal({
       <Command.List className="h-96 overflow-y-auto p-1">
         {query ? (
           <>
-            <Command.Empty className="py-8 text-center text-sm text-foreground/40">
-              No results for &ldquo;{query}&rdquo;
-            </Command.Empty>
+            {!peekFetching && (
+              <Command.Empty className="py-8 text-center text-sm text-foreground/40">
+                No results for &ldquo;{query}&rdquo;
+              </Command.Empty>
+            )}
             {matchedResourceMonitor && (
               <PaletteItem
                 value={matchedResourceMonitor.id}
@@ -402,6 +434,29 @@ export function CommandPaletteModal({
                 />
               );
             })}
+            {debouncedQuery.length >= 3 && peekFetching && peekHits.length === 0 && (
+              <div className="px-2 py-1.5 text-xs text-foreground/40">Searching files…</div>
+            )}
+            {debouncedQuery.length >= 3 && peekHits.length > 0 && (
+              <Command.Group heading="Files" className={GROUP_CLASS}>
+                {peekHits.map((hit) => (
+                  <PaletteFileItem
+                    key={`peek:${hit.absPath}`}
+                    value={`peek:${hit.absPath}`}
+                    item={{
+                      kind: 'peek',
+                      id: hit.absPath,
+                      title: hit.name,
+                      subtitle: `${hit.repoName} · ${hit.relPath}`,
+                      projectId: null,
+                      taskId: null,
+                      score: 0,
+                    }}
+                    onSelect={() => handlePeek(hit.absPath)}
+                  />
+                ))}
+              </Command.Group>
+            )}
           </>
         ) : (
           <>
