@@ -503,8 +503,17 @@ class AppService implements IInitializable, IDisposable {
 
     if (!command) throw new Error('Unsupported platform or app');
 
+    // cwd must be a directory; `target` may be a file (e.g. opening a peeked file),
+    // in which case use its parent — passing a file as cwd fails with ENOTDIR.
+    let cwd = target;
+    try {
+      if (!(await stat(target)).isDirectory()) cwd = parse(target).dir;
+    } catch {
+      cwd = parse(target).dir;
+    }
+
     await new Promise<void>((resolve, reject) => {
-      exec(command, { cwd: target, env: buildExternalToolEnv() }, (err) => {
+      exec(command, { cwd, env: buildExternalToolEnv() }, (err) => {
         if (err) return reject(err);
         resolve();
       });
