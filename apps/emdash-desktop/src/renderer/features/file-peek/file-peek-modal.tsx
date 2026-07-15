@@ -1,8 +1,7 @@
+import { OpenInMenu } from '@renderer/lib/components/titlebar/open-in-menu';
 import { FileIcon } from '@renderer/lib/editor/file-icon';
 import { useTheme } from '@renderer/lib/hooks/useTheme';
-import { rpc } from '@renderer/lib/ipc';
 import type { BaseModalProps } from '@renderer/lib/modal/modal-provider';
-import { Button } from '@renderer/lib/ui/button';
 import { DialogDescription, DialogHeader, DialogTitle } from '@renderer/lib/ui/dialog';
 import { Shortcut } from '@renderer/lib/ui/shortcut';
 import { FilePreview } from './file-preview';
@@ -11,7 +10,8 @@ export type FilePeekModalArgs = { absPath: string };
 
 /**
  * Read-only peek at any file by absolute path, hosted on the global modal system
- * (no task workspace, no navigation). Escape / the close button dismiss it.
+ * (no task workspace, no navigation). Escape / the close button dismiss it; the
+ * footer opens the file in your preferred editor (WebStorm, VS Code, …).
  */
 export function FilePeekModal({ absPath }: BaseModalProps<void> & FilePeekModalArgs) {
   const { effectiveTheme } = useTheme();
@@ -40,9 +40,7 @@ export function FilePeekModal({ absPath }: BaseModalProps<void> & FilePeekModalA
           <Shortcut hotkey="Escape" variant="badge" />
           Close
         </span>
-        <Button variant="outline" size="sm" onClick={() => void rpc.app.openPath(absPath)}>
-          Open externally
-        </Button>
+        <OpenInMenu path={absPath} />
       </div>
     </>
   );
