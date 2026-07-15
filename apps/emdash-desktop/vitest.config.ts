@@ -88,8 +88,12 @@ export default defineConfig({
         // Renderer terminal tests that need a real browser environment
         // (real CSS layout, ResizeObserver, requestAnimationFrame, WebGL).
         extends: true,
+        // Pre-bundle heavy deps so they aren't optimized mid-run (which reloads
+        // the page and duplicates React, breaking hooks in imported components).
+        optimizeDeps: { include: ['monaco-editor', '@monaco-editor/react'] },
         test: {
           name: 'browser',
+          setupFiles: ['./src/renderer/tests/browser/_setup-electron-api.ts'],
           browser: {
             enabled: true,
             provider: playwright(),

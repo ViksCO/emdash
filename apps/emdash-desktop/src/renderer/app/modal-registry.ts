@@ -6,6 +6,7 @@ import { AddProjectModal } from '@renderer/features/projects/components/add-proj
 import { ProjectConfigImportModal } from '@renderer/features/projects/components/settings-view/project-config-import-modal';
 import { ShareProjectConfigModal } from '@renderer/features/projects/components/settings-view/share-project-config-modal';
 import { GithubConnectModal } from '@renderer/features/settings/components/github-connect-modal';
+import { FilePeekModal } from '@renderer/features/file-peek/file-peek-modal';
 import { CreateSkillModal } from '@renderer/features/skills/components/CreateSkillModal';
 import { AddRemoteModal } from '@renderer/features/tasks/add-remote-modal';
 import { CreateConversationModal } from '@renderer/features/tasks/conversations/create-conversation-modal';
@@ -41,6 +42,7 @@ export function createModal<TProps, TResult>(
 
 export const modalRegistry = {
   commandPaletteModal: createModal(CommandPaletteModal, { size: 'md' }),
+  filePeekModal: createModal(FilePeekModal, { size: 'lg' }),
   taskModal: createModal(CreateTaskModal),
   addProjectModal: createModal(AddProjectModal),
   addSshConnModal: createModal(AddSshConnModal),
