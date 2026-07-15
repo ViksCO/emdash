@@ -181,13 +181,18 @@ export function CommandPaletteModal({
   // cmdk's currently-highlighted item value (for ⌘Enter to act on the selection).
   const [selectedValue, setSelectedValue] = useState('');
 
-  // Open a file read-only in the peek modal, replacing the palette (single active
-  // modal). setModal would capture the palette's own input as previousFocus, so
-  // preserve the pre-palette target to restore focus when the peek closes.
+  // Open a file read-only in the peek modal. Close the palette first, then open on
+  // the next frame: opening in place would reuse the palette's narrower modal box
+  // and the shared container would visibly grow (md → xl) as it swaps. Opening
+  // fresh lets the peek animate in at its own size. Preserve the pre-palette focus
+  // target so focus returns there when the peek closes.
   const handlePeek = (absPath: string) => {
     const preFocus = modalStore.previousFocus;
-    openPeek({ absPath });
-    modalStore.previousFocus = preFocus;
+    handleClose();
+    requestAnimationFrame(() => {
+      openPeek({ absPath });
+      modalStore.previousFocus = preFocus;
+    });
   };
 
   // ⌘/Ctrl+Enter peeks the highlighted file result read-only; plain Enter still
