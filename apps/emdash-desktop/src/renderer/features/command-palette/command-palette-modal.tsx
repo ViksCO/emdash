@@ -268,6 +268,22 @@ export function CommandPaletteModal({
   const taskResults = rankedDb.filter((r): r is SearchItem => r.kind === 'task');
   const conversationResults = rankedDb.filter((r): r is SearchItem => r.kind === 'conversation');
 
+  // cmdk only auto-selects the first item when the query changes, not when async
+  // results arrive later — so highlight the first item ourselves whenever the top
+  // result changes. Values mirror those set on the rendered items below.
+  const firstValue = query
+    ? matchedResourceMonitor
+      ? matchedResourceMonitor.id
+      : rankedDb[0]
+        ? rankedDb[0].kind === 'command'
+          ? rankedDb[0].id
+          : `${rankedDb[0].kind}:${rankedDb[0].id}`
+        : ''
+    : (actionResults[0]?.id ?? '');
+  useEffect(() => {
+    setSelectedValue(firstValue);
+  }, [firstValue]);
+
   const handleNavigateToTask = (item: SearchItem) => {
     if (!item.projectId) return;
     handleClose();
