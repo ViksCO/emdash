@@ -202,12 +202,14 @@ export function CommandPaletteModal({
   const [selectedValue, setSelectedValue] = useState('');
 
   // Resolve a file result's absolute path and bloom the peek layer in place.
+  // Mount the peek layer at its resting (hidden) state first, then flip to
+  // 'preview' next frame so the bloom transition actually fires from opacity 0.
   const peekFile = (file: SearchItem) => {
     if (!file.projectId || !file.taskId) return;
     const workspace = getWorkspaceForTask(file.projectId, file.taskId);
     if (!workspace?.path) return;
     setPeekPath(`${workspace.path}/${file.id}`);
-    setPhase('preview');
+    requestAnimationFrame(() => setPhase('preview'));
   };
 
   // ⌘/Ctrl+Enter peeks the highlighted file result (plain Enter peeks it too, via
@@ -579,43 +581,41 @@ export function CommandPaletteModal({
       >
         {searchCard}
       </div>
-      <div
-        ref={peekRef}
-        tabIndex={-1}
-        data-phase={phase}
-        inert={phase !== 'preview'}
-        className="cmdk-peek-layer flex h-[min(640px,80vh)] w-[860px] max-w-[90vw] flex-col overflow-hidden rounded-xl bg-background-quaternary text-sm ring-1 ring-foreground/10 outline-none"
-      >
-        {peekPath && (
-          <>
-            <div className="flex shrink-0 items-center gap-3 border-b border-foreground/10 px-4 py-3">
-              <FileIcon filename={peekName} size={18} />
-              <div className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate font-medium text-foreground">{peekName}</span>
-                <span className="truncate font-mono text-xs text-foreground/40">{peekPath}</span>
-              </div>
-              <button
-                type="button"
-                onClick={handleClose}
-                aria-label="Close"
-                className="flex size-7 shrink-0 items-center justify-center rounded-md text-foreground-muted hover:bg-background-2 hover:text-foreground"
-              >
-                <X size={16} />
-              </button>
+      {peekPath && (
+        <div
+          ref={peekRef}
+          tabIndex={-1}
+          data-phase={phase}
+          inert={phase !== 'preview'}
+          className="cmdk-peek-layer flex h-[min(640px,80vh)] w-[860px] max-w-[90vw] flex-col overflow-hidden rounded-xl bg-background-quaternary text-sm ring-1 ring-foreground/10 outline-none"
+        >
+          <div className="flex shrink-0 items-center gap-3 border-b border-foreground/10 px-4 py-3">
+            <FileIcon filename={peekName} size={18} />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate font-medium text-foreground">{peekName}</span>
+              <span className="truncate font-mono text-xs text-foreground/40">{peekPath}</span>
             </div>
-            <div className="min-h-0 flex-1 overflow-auto">
-              <FilePreview absPath={peekPath} effectiveTheme={effectiveTheme} />
-            </div>
-            <div className="flex shrink-0 items-center justify-between gap-4 border-t border-foreground/10 px-3 py-2">
-              <span className="flex items-center gap-1 text-xs text-foreground/40">
-                <Shortcut hotkey="Escape" variant="badge" />
-                Close
-              </span>
-              <OpenInMenu path={peekPath} />
-            </div>
-          </>
-        )}
-      </div>
+            <button
+              type="button"
+              onClick={handleClose}
+              aria-label="Close"
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-foreground-muted hover:bg-background-2 hover:text-foreground"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto">
+            <FilePreview absPath={peekPath} effectiveTheme={effectiveTheme} />
+          </div>
+          <div className="flex shrink-0 items-center justify-between gap-4 border-t border-foreground/10 px-3 py-2">
+            <span className="flex items-center gap-1 text-xs text-foreground/40">
+              <Shortcut hotkey="Escape" variant="badge" />
+              Close
+            </span>
+            <OpenInMenu path={peekPath} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
