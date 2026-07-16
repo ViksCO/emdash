@@ -1,15 +1,22 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Command } from 'cmdk';
-import { Activity, FolderOpen, GitBranch, MessageSquare, type LucideIcon } from 'lucide-react';
+import { Activity, FolderOpen, GitBranch, MessageSquare, X, type LucideIcon } from 'lucide-react';
 import { useObserver } from 'mobx-react-lite';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FilePreview } from '@renderer/features/file-peek/file-preview';
 import { useAppSettingsKey } from '@renderer/features/settings/use-app-settings-key';
 import { conversationRegistry } from '@renderer/features/tasks/stores/conversation-registry';
-import { getTaskStore, getTaskView } from '@renderer/features/tasks/stores/task-selectors';
+import {
+  getTaskStore,
+  getTaskView,
+  getWorkspaceForTask,
+} from '@renderer/features/tasks/stores/task-selectors';
 import { commandRegistry } from '@renderer/lib/commands/registry';
+import { OpenInMenu } from '@renderer/lib/components/titlebar/open-in-menu';
 import { FileIcon } from '@renderer/lib/editor/file-icon';
 import { useDebounce } from '@renderer/lib/hooks/useDebounce';
 import { getEffectiveHotkey } from '@renderer/lib/hooks/useKeyboardShortcuts';
+import { useTheme } from '@renderer/lib/hooks/useTheme';
 import { rpc } from '@renderer/lib/ipc';
 import { useNavigate } from '@renderer/lib/layout/navigation-provider';
 import { type BaseModalProps } from '@renderer/lib/modal/modal-provider';
@@ -18,6 +25,7 @@ import { Shortcut } from '@renderer/lib/ui/shortcut';
 import { cn } from '@renderer/utils/utils';
 import { ALL_COMMAND_DEFS, type CommandDef } from '@shared/commands';
 import type { SearchItem } from '@shared/core/search';
+import './command-palette-peek.css';
 import { getCommandIcon } from './command-icons';
 import { PaletteConversationItem } from './palette-conversation-item';
 import { PALETTE_ITEM_CLASS } from './palette-item-styles';
@@ -114,11 +122,24 @@ function PaletteFileItem({
   onSelect: () => void;
 }) {
   return (
-    <Command.Item value={value} onSelect={onSelect} className={PALETTE_ITEM_CLASS}>
+    <Command.Item value={value} onSelect={onSelect} className={cn(PALETTE_ITEM_CLASS, 'group')}>
       <FileIcon filename={item.title} size={14} />
       <span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
         <span className="shrink-0">{item.title}</span>
         <span className="truncate text-xs text-foreground/40">{item.subtitle}</span>
+      </span>
+      <span
+        className="hidden shrink-0 items-center gap-2 text-tiny group-aria-selected:flex"
+        style={{ color: 'var(--jade-11)' }}
+      >
+        <span className="flex items-center gap-1">
+          <Shortcut hotkey="Enter" variant="badge" />
+          Open
+        </span>
+        <span className="flex items-center gap-1">
+          <Shortcut hotkey="Mod+Enter" variant="badge" />
+          Peek
+        </span>
       </span>
     </Command.Item>
   );
@@ -132,13 +153,24 @@ export function CommandPaletteModal({
 }: CommandPaletteProps & BaseModalProps) {
   const [view, setView] = useState<'search' | 'resource-monitor'>('search');
   const [query, setQuery] = useState('');
+  // 'search' shows the palette; 'preview' cross-fades to the peek layer in place.
+  const [phase, setPhase] = useState<'search' | 'preview'>('search');
+  const [peekPath, setPeekPath] = useState<string | null>(null);
   const debouncedQuery = useDebounce(query, 100);
   const { navigate } = useNavigate();
+  const { effectiveTheme } = useTheme();
   const { value: resourceMonitor } = useAppSettingsKey('resourceMonitor');
   const { value: keyboard } = useAppSettingsKey('keyboard');
   const queryClient = useQueryClient();
+  const peekRef = useRef<HTMLDivElement>(null);
 
   const handleClose = onClose;
+
+  // Move focus onto the peek layer as it blooms in, so the (now hidden) search
+  // input can't swallow keystrokes and Esc/Tab act on the peek.
+  useEffect(() => {
+    if (phase === 'preview') peekRef.current?.focus();
+  }, [phase]);
 
   useEffect(() => {
     if (view !== 'resource-monitor') return;
@@ -171,6 +203,33 @@ export function CommandPaletteModal({
     // Skip FTS queries that the trigram tokenizer would reject (< 3 chars).
     enabled: debouncedQuery.length === 0 || debouncedQuery.length >= 3,
   });
+
+  // cmdk's currently-highlighted item value (for ⌘Enter to act on the selection).
+  const [selectedValue, setSelectedValue] = useState('');
+
+  // Resolve a file result's absolute path and bloom the peek layer in place.
+  // Mount the peek layer at its resting (hidden) state first, then flip to
+  // 'preview' next frame so the bloom transition actually fires from opacity 0.
+  const peekFile = (file: SearchItem) => {
+    if (!file.projectId || !file.taskId) return;
+    const workspace = getWorkspaceForTask(file.projectId, file.taskId);
+    if (!workspace?.path) return;
+    setPeekPath(`${workspace.path}/${file.id}`);
+    requestAnimationFrame(() => setPhase('preview'));
+  };
+
+  // ⌘/Ctrl+Enter peeks the highlighted file result; plain Enter / click opens it in
+  // the editor. Values are compared case-insensitively (cmdk lowercases).
+  const handlePeekShortcut = (e: React.KeyboardEvent) => {
+    if (!(e.metaKey || e.ctrlKey) || e.key !== 'Enter') return;
+    const file = rankedDb.find(
+      (r) => r.kind === 'file' && `file:${r.id}`.toLowerCase() === selectedValue.toLowerCase()
+    );
+    if (!file) return;
+    e.preventDefault();
+    e.stopPropagation();
+    peekFile(file);
+  };
 
   const registryActions = useObserver((): PaletteAction[] =>
     commandRegistry.activeCommands
@@ -235,6 +294,22 @@ export function CommandPaletteModal({
   const taskResults = rankedDb.filter((r): r is SearchItem => r.kind === 'task');
   const conversationResults = rankedDb.filter((r): r is SearchItem => r.kind === 'conversation');
 
+  // cmdk only auto-selects the first item when the query changes, not when async
+  // results arrive later — so highlight the first item ourselves whenever the top
+  // result changes. Values mirror those set on the rendered items below.
+  const firstValue = query
+    ? matchedResourceMonitor
+      ? matchedResourceMonitor.id
+      : rankedDb[0]
+        ? rankedDb[0].kind === 'command'
+          ? rankedDb[0].id
+          : `${rankedDb[0].kind}:${rankedDb[0].id}`
+        : ''
+    : (actionResults[0]?.id ?? '');
+  useEffect(() => {
+    setSelectedValue(firstValue);
+  }, [firstValue]);
+
   const handleNavigateToTask = (item: SearchItem) => {
     if (!item.projectId) return;
     handleClose();
@@ -284,8 +359,10 @@ export function CommandPaletteModal({
     return () => window.removeEventListener('keydown', onKey, true);
   }, [view, handleResourceMonitorBack]);
 
-  if (view === 'resource-monitor') {
-    return (
+  const peekName = peekPath ? (peekPath.split('/').pop() ?? peekPath) : '';
+
+  const searchCard =
+    view === 'resource-monitor' ? (
       <div className="flex flex-col overflow-hidden">
         <ResourceMonitorView onBack={handleResourceMonitorBack} />
         <div className="flex items-center gap-4 border-t border-foreground/10 px-3 py-2">
@@ -296,201 +373,262 @@ export function CommandPaletteModal({
           </span>
         </div>
       </div>
-    );
-  }
-
-  return (
-    <Command className="flex flex-col overflow-hidden" shouldFilter={false} loop>
-      <div className="border-b border-foreground/10 px-1">
-        <Command.Input
-          value={query}
-          onValueChange={setQuery}
-          placeholder="Search tasks, projects, actions…"
-          className="w-full bg-transparent px-3 py-3 text-sm outline-none placeholder:text-foreground/40"
-          autoFocus
-        />
-      </div>
-      <Command.List className="h-96 overflow-y-auto p-1">
-        {query ? (
-          <>
-            <Command.Empty className="py-8 text-center text-sm text-foreground/40">
-              No results for &ldquo;{query}&rdquo;
-            </Command.Empty>
-            {matchedResourceMonitor && (
-              <PaletteItem
-                value={matchedResourceMonitor.id}
-                item={matchedResourceMonitor}
-                onSelect={matchedResourceMonitor.execute}
-              />
-            )}
-            {rankedDb.map((item) => {
-              if (item.kind === 'command') {
-                const live = commandRegistry.findById(item.id);
-                if (!live || live.enabled === false || live.hideFromPalette) return null;
-                const def = ALL_COMMAND_DEFS.find((d) => d.id === item.id) as
-                  | CommandDef
-                  | undefined;
-                const shortcut = def?.shortcutKey
-                  ? getEffectiveHotkey(def.shortcutKey, keyboard)
-                  : null;
-                const displayItem: PaletteAction = {
-                  kind: 'action',
-                  id: item.id,
-                  title: live.label,
-                  subtitle: live.description,
-                  shortcut,
-                  icon: getCommandIcon(def?.iconKey),
-                  execute: () => {
-                    handleClose();
-                    live.execute();
-                  },
-                };
-                return (
-                  <PaletteItem
-                    key={item.id}
-                    value={item.id}
-                    item={displayItem}
-                    onSelect={() => {
+    ) : (
+      <Command
+        className="flex flex-col overflow-hidden"
+        shouldFilter={false}
+        loop
+        value={selectedValue}
+        onValueChange={setSelectedValue}
+        onKeyDown={handlePeekShortcut}
+      >
+        <div className="border-b border-foreground/10 px-1">
+          <Command.Input
+            value={query}
+            onValueChange={setQuery}
+            placeholder="Search tasks, projects, actions…"
+            className="w-full bg-transparent px-3 py-3 text-sm outline-none placeholder:text-foreground/40"
+            autoFocus
+            data-autofocus
+          />
+        </div>
+        <Command.List className="h-96 overflow-y-auto p-1">
+          {query ? (
+            <>
+              <Command.Empty className="py-8 text-center text-sm text-foreground/40">
+                No results for &ldquo;{query}&rdquo;
+              </Command.Empty>
+              {matchedResourceMonitor && (
+                <PaletteItem
+                  value={matchedResourceMonitor.id}
+                  item={matchedResourceMonitor}
+                  onSelect={matchedResourceMonitor.execute}
+                />
+              )}
+              {rankedDb.map((item) => {
+                if (item.kind === 'command') {
+                  const live = commandRegistry.findById(item.id);
+                  if (!live || live.enabled === false || live.hideFromPalette) return null;
+                  const def = ALL_COMMAND_DEFS.find((d) => d.id === item.id) as
+                    | CommandDef
+                    | undefined;
+                  const shortcut = def?.shortcutKey
+                    ? getEffectiveHotkey(def.shortcutKey, keyboard)
+                    : null;
+                  const displayItem: PaletteAction = {
+                    kind: 'action',
+                    id: item.id,
+                    title: live.label,
+                    subtitle: live.description,
+                    shortcut,
+                    icon: getCommandIcon(def?.iconKey),
+                    execute: () => {
                       handleClose();
                       live.execute();
-                    }}
-                  />
-                );
-              }
-              if (item.kind === 'task' && item.projectId) {
-                const store = getTaskStore(item.projectId, item.id);
-                if (store) {
+                    },
+                  };
                   return (
-                    <PaletteTaskItem
-                      key={`task:${item.id}`}
-                      taskStore={store}
-                      value={`task:${item.id}`}
-                      onSelect={() => handleNavigateToTask(item)}
-                    />
-                  );
-                }
-              }
-              if (item.kind === 'conversation' && item.projectId && item.taskId) {
-                const convStore = conversationRegistry.get(item.taskId)?.conversations.get(item.id);
-                if (convStore) {
-                  return (
-                    <PaletteConversationItem
-                      key={`conversation:${item.id}`}
-                      conv={convStore}
-                      value={`conversation:${item.id}`}
-                      onSelect={() => handleNavigateToConversation(item)}
-                    />
-                  );
-                }
-              }
-              if (item.kind === 'file') {
-                return (
-                  <PaletteFileItem
-                    key={`file:${item.id}`}
-                    value={`file:${item.id}`}
-                    item={item}
-                    onSelect={() => handleOpenFile(item)}
-                  />
-                );
-              }
-              return (
-                <PaletteItem
-                  key={`${item.kind}:${item.id}`}
-                  value={`${item.kind}:${item.id}`}
-                  item={item}
-                  onSelect={() => handleSelect(item)}
-                />
-              );
-            })}
-          </>
-        ) : (
-          <>
-            <PaletteNotificationsGroup
-              currentProjectId={projectId}
-              currentTaskId={taskId}
-              onClose={handleClose}
-              navigate={navigate}
-            />
-            {actionResults.length > 0 && (
-              <Command.Group heading="Suggested Actions" className={GROUP_CLASS}>
-                {actionResults.map((item) => (
-                  <PaletteItem key={item.id} value={item.id} item={item} onSelect={item.execute} />
-                ))}
-              </Command.Group>
-            )}
-            {taskResults.length > 0 && (
-              <Command.Group heading="Recent Tasks" className={GROUP_CLASS}>
-                {taskResults.slice(0, 5).map((item) => {
-                  const store = item.projectId ? getTaskStore(item.projectId, item.id) : undefined;
-                  return store ? (
-                    <PaletteTaskItem
-                      key={item.id}
-                      taskStore={store}
-                      value={item.id}
-                      onSelect={() => handleNavigateToTask(item)}
-                    />
-                  ) : (
                     <PaletteItem
                       key={item.id}
                       value={item.id}
-                      item={item}
-                      onSelect={() => handleNavigateToTask(item)}
+                      item={displayItem}
+                      onSelect={() => {
+                        handleClose();
+                        live.execute();
+                      }}
                     />
                   );
-                })}
-              </Command.Group>
-            )}
-            {!taskId && (
-              <PaletteProjectsGroup
+                }
+                if (item.kind === 'task' && item.projectId) {
+                  const store = getTaskStore(item.projectId, item.id);
+                  if (store) {
+                    return (
+                      <PaletteTaskItem
+                        key={`task:${item.id}`}
+                        taskStore={store}
+                        value={`task:${item.id}`}
+                        onSelect={() => handleNavigateToTask(item)}
+                      />
+                    );
+                  }
+                }
+                if (item.kind === 'conversation' && item.projectId && item.taskId) {
+                  const convStore = conversationRegistry
+                    .get(item.taskId)
+                    ?.conversations.get(item.id);
+                  if (convStore) {
+                    return (
+                      <PaletteConversationItem
+                        key={`conversation:${item.id}`}
+                        conv={convStore}
+                        value={`conversation:${item.id}`}
+                        onSelect={() => handleNavigateToConversation(item)}
+                      />
+                    );
+                  }
+                }
+                if (item.kind === 'file') {
+                  return (
+                    <PaletteFileItem
+                      key={`file:${item.id}`}
+                      value={`file:${item.id}`}
+                      item={item}
+                      onSelect={() => handleOpenFile(item)}
+                    />
+                  );
+                }
+                return (
+                  <PaletteItem
+                    key={`${item.kind}:${item.id}`}
+                    value={`${item.kind}:${item.id}`}
+                    item={item}
+                    onSelect={() => handleSelect(item)}
+                  />
+                );
+              })}
+            </>
+          ) : (
+            <>
+              <PaletteNotificationsGroup
                 currentProjectId={projectId}
-                limit={5}
+                currentTaskId={taskId}
                 onClose={handleClose}
                 navigate={navigate}
               />
-            )}
-            {taskId && conversationResults.length > 0 && (
-              <Command.Group heading="Recent Conversations" className={GROUP_CLASS}>
-                {conversationResults.slice(0, 5).map((item) => {
-                  const convStore = item.taskId
-                    ? conversationRegistry.get(item.taskId)?.conversations.get(item.id)
-                    : undefined;
-                  return convStore ? (
-                    <PaletteConversationItem
-                      key={item.id}
-                      conv={convStore}
-                      value={item.id}
-                      onSelect={() => handleNavigateToConversation(item)}
-                    />
-                  ) : (
+              {actionResults.length > 0 && (
+                <Command.Group heading="Suggested Actions" className={GROUP_CLASS}>
+                  {actionResults.map((item) => (
                     <PaletteItem
                       key={item.id}
                       value={item.id}
                       item={item}
-                      onSelect={() => handleNavigateToConversation(item)}
+                      onSelect={item.execute}
                     />
-                  );
-                })}
-              </Command.Group>
-            )}
-          </>
-        )}
-      </Command.List>
+                  ))}
+                </Command.Group>
+              )}
+              {taskResults.length > 0 && (
+                <Command.Group heading="Recent Tasks" className={GROUP_CLASS}>
+                  {taskResults.slice(0, 5).map((item) => {
+                    const store = item.projectId
+                      ? getTaskStore(item.projectId, item.id)
+                      : undefined;
+                    return store ? (
+                      <PaletteTaskItem
+                        key={item.id}
+                        taskStore={store}
+                        value={item.id}
+                        onSelect={() => handleNavigateToTask(item)}
+                      />
+                    ) : (
+                      <PaletteItem
+                        key={item.id}
+                        value={item.id}
+                        item={item}
+                        onSelect={() => handleNavigateToTask(item)}
+                      />
+                    );
+                  })}
+                </Command.Group>
+              )}
+              {!taskId && (
+                <PaletteProjectsGroup
+                  currentProjectId={projectId}
+                  limit={5}
+                  onClose={handleClose}
+                  navigate={navigate}
+                />
+              )}
+              {taskId && conversationResults.length > 0 && (
+                <Command.Group heading="Recent Conversations" className={GROUP_CLASS}>
+                  {conversationResults.slice(0, 5).map((item) => {
+                    const convStore = item.taskId
+                      ? conversationRegistry.get(item.taskId)?.conversations.get(item.id)
+                      : undefined;
+                    return convStore ? (
+                      <PaletteConversationItem
+                        key={item.id}
+                        conv={convStore}
+                        value={item.id}
+                        onSelect={() => handleNavigateToConversation(item)}
+                      />
+                    ) : (
+                      <PaletteItem
+                        key={item.id}
+                        value={item.id}
+                        item={item}
+                        onSelect={() => handleNavigateToConversation(item)}
+                      />
+                    );
+                  })}
+                </Command.Group>
+              )}
+            </>
+          )}
+        </Command.List>
 
-      <div className="flex items-center gap-4 border-t border-foreground/10 px-3 py-2">
-        <span className="flex items-center gap-1 text-xs text-foreground/40">
-          <Shortcut hotkey="ArrowUp" variant="badge" />
-          <Shortcut hotkey="ArrowDown" variant="badge" />
-          Navigate
-        </span>
-        <span className="flex items-center gap-1 text-xs text-foreground/40">
-          <Shortcut hotkey="Enter" variant="badge" />
-          Select
-        </span>
-        <span className="flex items-center gap-1 text-xs text-foreground/40">
-          <Shortcut hotkey="Escape" variant="badge" />
-          Close
-        </span>
+        <div className="flex items-center gap-4 border-t border-foreground/10 px-3 py-2">
+          <span className="flex items-center gap-1 text-xs text-foreground/40">
+            <Shortcut hotkey="ArrowUp" variant="badge" />
+            <Shortcut hotkey="ArrowDown" variant="badge" />
+            Navigate
+          </span>
+          <span className="flex items-center gap-1 text-xs text-foreground/40">
+            <Shortcut hotkey="Enter" variant="badge" />
+            Select
+          </span>
+          <span className="flex items-center gap-1 text-xs text-foreground/40">
+            <Shortcut hotkey="Escape" variant="badge" />
+            Close
+          </span>
+        </div>
+      </Command>
+    );
+
+  return (
+    <div className="cmdk-stage">
+      <div
+        data-phase={phase}
+        inert={phase === 'preview'}
+        className="cmdk-search-layer flex max-h-[72vh] w-[600px] max-w-[92vw] flex-col overflow-hidden rounded-xl bg-background-quaternary text-sm ring-1 ring-foreground/10"
+      >
+        {searchCard}
       </div>
-    </Command>
+      {peekPath && (
+        <div
+          ref={peekRef}
+          tabIndex={-1}
+          data-phase={phase}
+          inert={phase !== 'preview'}
+          className="cmdk-peek-layer flex h-[min(640px,80vh)] w-[860px] max-w-[90vw] flex-col overflow-hidden rounded-xl bg-background-quaternary text-sm ring-1 ring-foreground/10 outline-none"
+        >
+          <div className="flex shrink-0 items-center gap-3 border-b border-foreground/10 px-4 py-3">
+            <FileIcon filename={peekName} size={18} />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate font-medium text-foreground">{peekName}</span>
+              <span className="truncate font-mono text-xs text-foreground/40">{peekPath}</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleClose}
+              aria-label="Close"
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-foreground-muted hover:bg-background-2 hover:text-foreground"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto">
+            <FilePreview absPath={peekPath} effectiveTheme={effectiveTheme} />
+          </div>
+          <div className="flex shrink-0 items-center justify-between gap-4 border-t border-foreground/10 px-3 py-2">
+            <span className="flex items-center gap-1 text-xs text-foreground/40">
+              <Shortcut hotkey="Escape" variant="badge" />
+              Close
+            </span>
+            <OpenInMenu path={peekPath} />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

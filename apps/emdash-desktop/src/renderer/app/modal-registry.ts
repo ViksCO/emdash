@@ -30,6 +30,13 @@ export type ModalRegistryEntry<TProps = unknown, TResult = unknown> = {
   component: ModalComponent<TProps, TResult>;
   size?: ModalSize;
   position?: ModalPosition;
+  /**
+   * Render the popup as a full-bleed, chromeless, transparent container instead
+   * of the sized/chromed card. The modal then owns its own layout and surfaces
+   * (e.g. the command palette hosting a search layer + a peek layer under one
+   * scrim). The overlay scrim, focus trap, and initial-focus still apply.
+   */
+  bare?: boolean;
 };
 
 export function createModal<TProps, TResult>(
@@ -40,7 +47,7 @@ export function createModal<TProps, TResult>(
 }
 
 export const modalRegistry = {
-  commandPaletteModal: createModal(CommandPaletteModal, { size: 'md' }),
+  commandPaletteModal: createModal(CommandPaletteModal, { bare: true }),
   taskModal: createModal(CreateTaskModal),
   addProjectModal: createModal(AddProjectModal),
   addSshConnModal: createModal(AddSshConnModal),
