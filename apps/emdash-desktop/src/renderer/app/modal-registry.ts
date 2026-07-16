@@ -6,7 +6,6 @@ import { AddProjectModal } from '@renderer/features/projects/components/add-proj
 import { ProjectConfigImportModal } from '@renderer/features/projects/components/settings-view/project-config-import-modal';
 import { ShareProjectConfigModal } from '@renderer/features/projects/components/settings-view/share-project-config-modal';
 import { GithubConnectModal } from '@renderer/features/settings/components/github-connect-modal';
-import { FilePeekModal } from '@renderer/features/file-peek/file-peek-modal';
 import { CreateSkillModal } from '@renderer/features/skills/components/CreateSkillModal';
 import { AddRemoteModal } from '@renderer/features/tasks/add-remote-modal';
 import { CreateConversationModal } from '@renderer/features/tasks/conversations/create-conversation-modal';
@@ -31,6 +30,13 @@ export type ModalRegistryEntry<TProps = unknown, TResult = unknown> = {
   component: ModalComponent<TProps, TResult>;
   size?: ModalSize;
   position?: ModalPosition;
+  /**
+   * Render the popup as a full-bleed, chromeless, transparent container instead
+   * of the sized/chromed card. The modal then owns its own layout and surfaces
+   * (e.g. the command palette hosting a search layer + a peek layer under one
+   * scrim). The overlay scrim, focus trap, and initial-focus still apply.
+   */
+  bare?: boolean;
 };
 
 export function createModal<TProps, TResult>(
@@ -41,8 +47,7 @@ export function createModal<TProps, TResult>(
 }
 
 export const modalRegistry = {
-  commandPaletteModal: createModal(CommandPaletteModal, { size: 'md' }),
-  filePeekModal: createModal(FilePeekModal, { size: 'xl' }),
+  commandPaletteModal: createModal(CommandPaletteModal, { bare: true }),
   taskModal: createModal(CreateTaskModal),
   addProjectModal: createModal(AddProjectModal),
   addSshConnModal: createModal(AddSshConnModal),
