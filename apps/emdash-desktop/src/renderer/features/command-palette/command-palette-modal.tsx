@@ -129,11 +129,17 @@ function PaletteFileItem({
         <span className="truncate text-xs text-foreground/40">{item.subtitle}</span>
       </span>
       <span
-        className="hidden shrink-0 items-center gap-1 text-tiny group-aria-selected:flex"
+        className="hidden shrink-0 items-center gap-2 text-tiny group-aria-selected:flex"
         style={{ color: 'var(--jade-11)' }}
       >
-        <Shortcut hotkey="Mod+Enter" variant="badge" />
-        Peek file
+        <span className="flex items-center gap-1">
+          <Shortcut hotkey="Enter" variant="badge" />
+          Open
+        </span>
+        <span className="flex items-center gap-1">
+          <Shortcut hotkey="Mod+Enter" variant="badge" />
+          Peek
+        </span>
       </span>
     </Command.Item>
   );
@@ -212,8 +218,8 @@ export function CommandPaletteModal({
     requestAnimationFrame(() => setPhase('preview'));
   };
 
-  // ⌘/Ctrl+Enter peeks the highlighted file result (plain Enter peeks it too, via
-  // its row onSelect). Values are compared case-insensitively (cmdk lowercases).
+  // ⌘/Ctrl+Enter peeks the highlighted file result; plain Enter / click opens it in
+  // the editor. Values are compared case-insensitively (cmdk lowercases).
   const handlePeekShortcut = (e: React.KeyboardEvent) => {
     if (!(e.metaKey || e.ctrlKey) || e.key !== 'Enter') return;
     const file = rankedDb.find(
@@ -322,11 +328,18 @@ export function CommandPaletteModal({
     navigate('task', { projectId: item.projectId, taskId: item.taskId });
   };
 
+  const handleOpenFile = (item: SearchItem) => {
+    if (!item.projectId || !item.taskId) return;
+    getTaskView(item.projectId, item.taskId)?.tabManager.openFile(item.id);
+    handleClose();
+    navigate('task', { projectId: item.projectId, taskId: item.taskId });
+  };
+
   const handleSelect = (item: SearchItem) => {
     if (item.kind === 'task') return handleNavigateToTask(item);
     if (item.kind === 'project') return handleNavigateToProject(item);
     if (item.kind === 'conversation') return handleNavigateToConversation(item);
-    if (item.kind === 'file') return peekFile(item);
+    if (item.kind === 'file') return handleOpenFile(item);
   };
 
   const handleResourceMonitorBack = useCallback(() => {
@@ -460,7 +473,7 @@ export function CommandPaletteModal({
                       key={`file:${item.id}`}
                       value={`file:${item.id}`}
                       item={item}
-                      onSelect={() => peekFile(item)}
+                      onSelect={() => handleOpenFile(item)}
                     />
                   );
                 }
