@@ -34,7 +34,7 @@ describe('FilePreview (read-only peek render)', () => {
         return Promise.resolve(
           path in files
             ? { success: true, content: files[path] }
-            : { success: false, error: 'ENOENT' }
+            : { success: false, error: 'File not found' }
         );
       }
       return Promise.resolve({ success: true });
@@ -77,10 +77,10 @@ describe('FilePreview (read-only peek render)', () => {
     await expect.element(screen.getByText(/can.t preview this file type/i)).toBeVisible();
   });
 
-  it('shows an error message when the file cannot be read', async () => {
+  it('surfaces the read error message when the file cannot be read', async () => {
     const screen = await renderWithTheme(
       <FilePreview absPath="/repo/missing.ts" effectiveTheme="emdark" />
     );
-    await expect.element(screen.getByText(/couldn.t open this file/i)).toBeVisible();
+    await expect.element(screen.getByText(/file not found/i)).toBeVisible();
   });
 });

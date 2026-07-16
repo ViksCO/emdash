@@ -17,7 +17,6 @@ const SIZE_CLASSES: Record<ModalSize, string> = {
   sm: 'sm:max-w-sm',
   md: 'sm:max-w-lg',
   lg: 'sm:max-w-2xl',
-  xl: 'sm:max-w-6xl',
 };
 
 const POSITION_CLASSES: Record<ModalPosition, string> = {
@@ -117,7 +116,7 @@ export const ModalRenderer = observer(function ModalRenderer() {
                 // scrim finish + revert to visible mid-close, flashing the dark bg back.
                 'pointer-events-none fixed inset-0 z-50 duration-100 outline-none data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95'
               : cn(
-                  'fixed left-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 flex-col overflow-hidden rounded-xl bg-background-quaternary text-sm ring-1 ring-foreground/10 transition-[max-width] duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95',
+                  'fixed left-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 flex-col overflow-hidden rounded-xl bg-background-quaternary text-sm ring-1 ring-foreground/10 duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95',
                   POSITION_CLASSES[displayEntry?.position ?? 'center'],
                   SIZE_CLASSES[displayEntry?.size ?? 'md']
                 )

@@ -23,7 +23,7 @@ import { GithubDeviceFlowModal } from '@renderer/lib/components/github-device-fl
 import { UnsavedChangesDialog } from '@renderer/lib/components/unsaved-changes-dialog';
 import { type ModalComponent } from '@renderer/lib/modal/modal-provider';
 
-export type ModalSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
+export type ModalSize = 'xs' | 'sm' | 'md' | 'lg';
 export type ModalPosition = 'center' | 'top';
 
 export type ModalRegistryEntry<TProps = unknown, TResult = unknown> = {

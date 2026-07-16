@@ -107,7 +107,7 @@ export function FilePreview({
       <div className="flex h-full min-h-[200px] flex-col items-center justify-center px-6 py-10 text-center">
         <p className="text-sm text-foreground-tertiary">
           {state.status === 'error'
-            ? 'Couldn’t open this file.'
+            ? state.message
             : 'Can’t preview this file type — use “Open externally” below.'}
         </p>
       </div>
