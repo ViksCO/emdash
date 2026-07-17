@@ -2,6 +2,7 @@ import { getDiagnosticLogAttachment } from '@main/lib/file-logger';
 import { telemetryService } from '@main/lib/telemetry';
 import { createRPCController } from '@shared/lib/ipc/rpc';
 import type { OpenInAppId } from '@shared/openInApps';
+import { defaultDevRoot, discoverGitReposCached, listRepoFiles } from './repo-discovery';
 import { appService } from './service';
 
 export const appController = createRPCController({
@@ -83,4 +84,24 @@ export const appController = createRPCController({
   getElectronVersion: () => process.versions.electron,
   getPlatform: () => process.platform,
   getDiagnosticLogAttachment,
+  // Cross-repo file peek: discover git repos under a dev root, then enumerate one
+  // repo's files on demand so the palette can fuzzy-find and peek across repos
+  // emdash hasn't mounted. Path-addressed, like readUserFile — see repo-discovery.
+  discoverRepos: async (args?: { root?: string; refresh?: boolean }) => {
+    try {
+      const root = args?.root ?? defaultDevRoot();
+      const repos = await discoverGitReposCached(root, { refresh: args?.refresh });
+      return { success: true as const, root, repos };
+    } catch (error) {
+      return { success: false as const, error: error instanceof Error ? error.message : String(error) };
+    }
+  },
+  listRepoFiles: async (args: { repoPath: string }) => {
+    try {
+      const result = await listRepoFiles(args.repoPath);
+      return { success: true as const, ...result };
+    } catch (error) {
+      return { success: false as const, error: error instanceof Error ? error.message : String(error) };
+    }
+  },
 });
