@@ -1,6 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Command } from 'cmdk';
-import { Activity, FolderOpen, GitBranch, MessageSquare, X, type LucideIcon } from 'lucide-react';
+import {
+  Activity,
+  FolderGit2,
+  FolderOpen,
+  GitBranch,
+  MessageSquare,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import { useObserver } from 'mobx-react-lite';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FilePreview } from '@renderer/features/file-peek/file-preview';
@@ -34,6 +42,7 @@ import { PaletteProjectsGroup } from './palette-projects-group';
 import { PaletteTaskItem } from './palette-task-item';
 import { ResourceMonitorView } from './resource-monitor-view';
 import { applyContextAffinity } from './search-utils';
+import { useRepoScope, type RepoScope } from './use-repo-scope';
 
 interface CommandPaletteProps {
   projectId?: string;
@@ -145,6 +154,65 @@ function PaletteFileItem({
   );
 }
 
+function PaletteRepoItem({
+  value,
+  repo,
+  onSelect,
+}: {
+  value: string;
+  repo: RepoScope;
+  onSelect: () => void;
+}) {
+  return (
+    <Command.Item value={value} onSelect={onSelect} className={cn(PALETTE_ITEM_CLASS, 'group')}>
+      <FolderGit2 size={14} className="shrink-0 text-foreground/40" />
+      <span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
+        <span className="shrink-0">{repo.name}</span>
+        <span className="truncate text-xs text-foreground/40">{repo.path}</span>
+      </span>
+      <span
+        className="hidden shrink-0 items-center gap-1 text-tiny group-aria-selected:flex"
+        style={{ color: 'var(--jade-11)' }}
+      >
+        <Shortcut hotkey="Enter" variant="badge" />
+        Find files
+      </span>
+    </Command.Item>
+  );
+}
+
+function PaletteRepoFileItem({
+  value,
+  relPath,
+  onSelect,
+}: {
+  value: string;
+  relPath: string;
+  onSelect: () => void;
+}) {
+  const slash = relPath.lastIndexOf('/');
+  const name = relPath.slice(slash + 1);
+  // A root-level file has no '/'; guard so the dir label isn't `slice(0, -1)`
+  // (which would render the filename minus its last character).
+  const dir = slash === -1 ? '' : relPath.slice(0, slash);
+  return (
+    <Command.Item value={value} onSelect={onSelect} className={cn(PALETTE_ITEM_CLASS, 'group')}>
+      <FileIcon filename={name} size={14} />
+      <span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
+        <span className="shrink-0">{name}</span>
+        {dir && <span className="truncate text-xs text-foreground/40">{dir}</span>}
+      </span>
+      <span
+        className="hidden shrink-0 items-center gap-1 text-tiny group-aria-selected:flex"
+        style={{ color: 'var(--jade-11)' }}
+      >
+        <Shortcut hotkey="Enter" variant="badge" />
+        Peek
+      </span>
+    </Command.Item>
+  );
+}
+
 export function CommandPaletteModal({
   projectId,
   taskId,
@@ -163,6 +231,7 @@ export function CommandPaletteModal({
   const { value: keyboard } = useAppSettingsKey('keyboard');
   const queryClient = useQueryClient();
   const peekRef = useRef<HTMLDivElement>(null);
+  const repoScope = useRepoScope(query);
 
   const handleClose = onClose;
 
@@ -200,27 +269,58 @@ export function CommandPaletteModal({
     // returns cached data instantly rather than waiting for a round-trip.
     staleTime: 5_000,
     placeholderData: (prev) => prev,
-    // Skip FTS queries that the trigram tokenizer would reject (< 3 chars).
-    enabled: debouncedQuery.length === 0 || debouncedQuery.length >= 3,
+    // Skip FTS queries that the trigram tokenizer would reject (< 3 chars), and
+    // skip entirely in repo-pick/scope mode where these results aren't rendered.
+    enabled:
+      (debouncedQuery.length === 0 || debouncedQuery.length >= 3) &&
+      !repoScope.scope &&
+      !repoScope.atMode,
   });
 
   // cmdk's currently-highlighted item value (for ⌘Enter to act on the selection).
   const [selectedValue, setSelectedValue] = useState('');
 
-  // Resolve a file result's absolute path and bloom the peek layer in place.
-  // Mount the peek layer at its resting (hidden) state first, then flip to
-  // 'preview' next frame so the bloom transition actually fires from opacity 0.
+  // Bloom the peek layer in place over an absolute path. Mount the peek layer at
+  // its resting (hidden) state first, then flip to 'preview' next frame so the
+  // bloom transition actually fires from opacity 0.
+  const openPeek = (absPath: string) => {
+    setPeekPath(absPath);
+    requestAnimationFrame(() => setPhase('preview'));
+  };
+
+  // Resolve a workspace file result's absolute path and peek it.
   const peekFile = (file: SearchItem) => {
     if (!file.projectId || !file.taskId) return;
     const workspace = getWorkspaceForTask(file.projectId, file.taskId);
     if (!workspace?.path) return;
-    setPeekPath(`${workspace.path}/${file.id}`);
-    requestAnimationFrame(() => setPhase('preview'));
+    openPeek(`${workspace.path}/${file.id}`);
   };
 
-  // ⌘/Ctrl+Enter peeks the highlighted file result; plain Enter / click opens it in
-  // the editor. Values are compared case-insensitively (cmdk lowercases).
-  const handlePeekShortcut = (e: React.KeyboardEvent) => {
+  // Peek a file inside the scoped repo (path relative to the repo root).
+  const peekRepoFile = (relPath: string) => {
+    if (!repoScope.scope) return;
+    openPeek(`${repoScope.scope.path}/${relPath}`);
+  };
+
+  const handleSelectRepo = (repo: RepoScope) => {
+    repoScope.setScope(repo);
+    setQuery('');
+  };
+
+  const clearRepoScope = () => {
+    repoScope.setScope(null);
+    setQuery('');
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Backspace on an empty query removes the active repo chip and returns to search.
+    if (e.key === 'Backspace' && query === '' && repoScope.scope) {
+      e.preventDefault();
+      clearRepoScope();
+      return;
+    }
+    // ⌘/Ctrl+Enter peeks the highlighted file result; plain Enter / click opens it in
+    // the editor. Values are compared case-insensitively (cmdk lowercases).
     if (!(e.metaKey || e.ctrlKey) || e.key !== 'Enter') return;
     const file = rankedDb.find(
       (r) => r.kind === 'file' && `file:${r.id}`.toLowerCase() === selectedValue.toLowerCase()
@@ -297,15 +397,23 @@ export function CommandPaletteModal({
   // cmdk only auto-selects the first item when the query changes, not when async
   // results arrive later — so highlight the first item ourselves whenever the top
   // result changes. Values mirror those set on the rendered items below.
-  const firstValue = query
-    ? matchedResourceMonitor
-      ? matchedResourceMonitor.id
-      : rankedDb[0]
-        ? rankedDb[0].kind === 'command'
-          ? rankedDb[0].id
-          : `${rankedDb[0].kind}:${rankedDb[0].id}`
+  const firstValue = repoScope.scope
+    ? repoScope.fileResults[0]
+      ? `repofile:${repoScope.fileResults[0]}`
+      : ''
+    : repoScope.atMode
+      ? repoScope.repoResults[0]
+        ? `repo:${repoScope.repoResults[0].path}`
         : ''
-    : (actionResults[0]?.id ?? '');
+      : query
+        ? matchedResourceMonitor
+          ? matchedResourceMonitor.id
+          : rankedDb[0]
+            ? rankedDb[0].kind === 'command'
+              ? rankedDb[0].id
+              : `${rankedDb[0].kind}:${rankedDb[0].id}`
+            : ''
+        : (actionResults[0]?.id ?? '');
   useEffect(() => {
     setSelectedValue(firstValue);
   }, [firstValue]);
@@ -380,20 +488,84 @@ export function CommandPaletteModal({
         loop
         value={selectedValue}
         onValueChange={setSelectedValue}
-        onKeyDown={handlePeekShortcut}
+        onKeyDown={handleKeyDown}
       >
-        <div className="border-b border-foreground/10 px-1">
+        <div className="flex items-center border-b border-foreground/10 px-1">
+          {repoScope.scope && (
+            <button
+              type="button"
+              onClick={clearRepoScope}
+              aria-label={`Remove ${repoScope.scope.name} scope`}
+              className="ml-2 flex shrink-0 items-center gap-1 rounded-md bg-foreground/5 py-1 pl-2 pr-1.5 text-xs text-foreground/80 hover:bg-foreground/10"
+            >
+              <FolderGit2 size={12} className="text-foreground/50" />
+              <span className="max-w-[160px] truncate">{repoScope.scope.name}</span>
+              <X size={12} className="text-foreground/50" />
+            </button>
+          )}
           <Command.Input
             value={query}
             onValueChange={setQuery}
-            placeholder="Search tasks, projects, actions…"
+            placeholder={
+              repoScope.scope
+                ? `Find a file in ${repoScope.scope.name}…`
+                : 'Search, or @ to find a file in any repo…'
+            }
             className="w-full bg-transparent px-3 py-3 text-sm outline-none placeholder:text-foreground/40"
             autoFocus
             data-autofocus
           />
         </div>
         <Command.List className="h-96 overflow-y-auto p-1">
-          {query ? (
+          {repoScope.scope ? (
+            <>
+              {repoScope.fileResults.length === 0 ? (
+                repoScope.filesError && !repoScope.filesLoading ? (
+                  <div className="py-8 text-center text-sm text-destructive">
+                    Couldn&rsquo;t read files in {repoScope.scope.name}
+                    <div className="mt-1 text-xs text-foreground/40">{repoScope.filesError}</div>
+                  </div>
+                ) : (
+                  <div className="py-8 text-center text-sm text-foreground/40">
+                    {repoScope.filesLoading
+                      ? 'Loading files…'
+                      : query
+                        ? `No files matching “${query}”`
+                        : 'This repository has no files to show'}
+                  </div>
+                )
+              ) : (
+                repoScope.fileResults.map((relPath) => (
+                  <PaletteRepoFileItem
+                    key={relPath}
+                    value={`repofile:${relPath}`}
+                    relPath={relPath}
+                    onSelect={() => peekRepoFile(relPath)}
+                  />
+                ))
+              )}
+              {repoScope.filesTruncated && (
+                <div className="px-2 py-1.5 text-tiny text-foreground/30">
+                  Showing part of a large repository — type to narrow results.
+                </div>
+              )}
+            </>
+          ) : repoScope.atMode ? (
+            repoScope.repoResults.length === 0 ? (
+              <div className="py-8 text-center text-sm text-foreground/40">
+                {repoScope.reposLoading ? 'Discovering repositories…' : 'No repositories found'}
+              </div>
+            ) : (
+              repoScope.repoResults.map((repo) => (
+                <PaletteRepoItem
+                  key={repo.path}
+                  value={`repo:${repo.path}`}
+                  repo={repo}
+                  onSelect={() => handleSelectRepo(repo)}
+                />
+              ))
+            )
+          ) : query ? (
             <>
               <Command.Empty className="py-8 text-center text-sm text-foreground/40">
                 No results for &ldquo;{query}&rdquo;

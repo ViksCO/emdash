@@ -46,6 +46,31 @@ export interface ListOptions {
   maxEntries?: number;
   /** Time budget in milliseconds */
   timeBudgetMs?: number;
+  /**
+   * Abort the traversal from the caller side. Checked alongside the provider's own
+   * cancel token, so an external signal (e.g. a superseded/cancelled request) stops
+   * the in-process crawl on the next tick.
+   */
+  signal?: AbortSignal;
+  /** Omit directory entries from the result and count only files toward `maxEntries`. */
+  filesOnly?: boolean;
+  /**
+   * Skip the per-entry `stat`; return entries with `path` and `type` only. Faster
+   * when the caller needs paths (not size/mtime); symlinks are still resolved once
+   * when `restrictSymlinksToRoot` is set.
+   */
+  pathsOnly?: boolean;
+  /**
+   * Apply the tree's `.gitignore` rules while walking — the repo-root file plus any
+   * nested per-directory `.gitignore` (so monorepo package build output is pruned).
+   */
+  respectGitignore?: boolean;
+  /**
+   * Resolve symlinks and keep only those pointing at a file inside the root: a
+   * symlinked directory is skipped (never emitted as a file, never followed), and a
+   * symlink whose target escapes the root or is broken is dropped.
+   */
+  restrictSymlinksToRoot?: boolean;
 }
 
 /**
@@ -59,7 +84,7 @@ export interface FileListResult {
   /** Whether the result was truncated due to limits */
   truncated?: boolean;
   /** Reason for truncation if applicable */
-  truncateReason?: 'maxEntries' | 'timeBudget';
+  truncateReason?: 'maxEntries' | 'timeBudget' | 'aborted';
   /** Duration of the operation in milliseconds */
   durationMs?: number;
 }
