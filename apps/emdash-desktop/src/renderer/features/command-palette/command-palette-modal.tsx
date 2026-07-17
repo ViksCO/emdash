@@ -190,8 +190,11 @@ function PaletteRepoFileItem({
   relPath: string;
   onSelect: () => void;
 }) {
-  const name = relPath.slice(relPath.lastIndexOf('/') + 1);
-  const dir = relPath.slice(0, relPath.lastIndexOf('/'));
+  const slash = relPath.lastIndexOf('/');
+  const name = relPath.slice(slash + 1);
+  // A root-level file has no '/'; guard so the dir label isn't `slice(0, -1)`
+  // (which would render the filename minus its last character).
+  const dir = slash === -1 ? '' : relPath.slice(0, slash);
   return (
     <Command.Item value={value} onSelect={onSelect} className={cn(PALETTE_ITEM_CLASS, 'group')}>
       <FileIcon filename={name} size={14} />
@@ -266,8 +269,12 @@ export function CommandPaletteModal({
     // returns cached data instantly rather than waiting for a round-trip.
     staleTime: 5_000,
     placeholderData: (prev) => prev,
-    // Skip FTS queries that the trigram tokenizer would reject (< 3 chars).
-    enabled: debouncedQuery.length === 0 || debouncedQuery.length >= 3,
+    // Skip FTS queries that the trigram tokenizer would reject (< 3 chars), and
+    // skip entirely in repo-pick/scope mode where these results aren't rendered.
+    enabled:
+      (debouncedQuery.length === 0 || debouncedQuery.length >= 3) &&
+      !repoScope.scope &&
+      !repoScope.atMode,
   });
 
   // cmdk's currently-highlighted item value (for ⌘Enter to act on the selection).
@@ -513,13 +520,20 @@ export function CommandPaletteModal({
           {repoScope.scope ? (
             <>
               {repoScope.fileResults.length === 0 ? (
-                <div className="py-8 text-center text-sm text-foreground/40">
-                  {repoScope.filesLoading
-                    ? 'Loading files…'
-                    : query
-                      ? `No files matching “${query}”`
-                      : 'This repository has no files to show'}
-                </div>
+                repoScope.filesError && !repoScope.filesLoading ? (
+                  <div className="py-8 text-center text-sm text-destructive">
+                    Couldn&rsquo;t read files in {repoScope.scope.name}
+                    <div className="mt-1 text-xs text-foreground/40">{repoScope.filesError}</div>
+                  </div>
+                ) : (
+                  <div className="py-8 text-center text-sm text-foreground/40">
+                    {repoScope.filesLoading
+                      ? 'Loading files…'
+                      : query
+                        ? `No files matching “${query}”`
+                        : 'This repository has no files to show'}
+                  </div>
+                )
               ) : (
                 repoScope.fileResults.map((relPath) => (
                   <PaletteRepoFileItem

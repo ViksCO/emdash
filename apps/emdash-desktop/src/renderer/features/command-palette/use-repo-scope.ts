@@ -1,7 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { useMemo, useState } from 'react';
+import { useDebounce } from '@renderer/lib/hooks/useDebounce';
 import { rpc } from '@renderer/lib/ipc';
 import { fuzzyFilterFiles, subsequenceScore } from './fuzzy-match';
+import { parseRepoScopeQuery } from './repo-scope-query';
 
 export interface RepoScope {
   name: string;
@@ -26,8 +28,8 @@ const FILE_RESULT_LIMIT = 50;
 export function useRepoScope(query: string) {
   const [scope, setScope] = useState<RepoScope | null>(null);
 
-  const atMode = !scope && query.startsWith('@');
-  const repoFilter = atMode ? query.slice(1) : '';
+  const { isRepoQuery, filter: repoFilter } = parseRepoScopeQuery(query);
+  const atMode = !scope && isRepoQuery;
 
   // Discover repos lazily — the query only runs once the user reaches `@`.
   const { data: discovery, isFetching: reposLoading } = useQuery({
@@ -55,18 +57,30 @@ export function useRepoScope(query: string) {
   // One bounded file crawl per scoped repo; result cached and filtered in memory.
   const { data: fileList, isFetching: filesLoading } = useQuery({
     queryKey: ['cmdk-repo-files', scope?.path],
-    queryFn: () => rpc.app.listRepoFiles({ repoPath: scope!.path }),
+    queryFn: async ({ signal }) => {
+      const result = await rpc.app.listRepoFiles({ repoPath: scope!.path });
+      // The backend aborts a superseded crawl; on this side, drop its result if the
+      // scope changed mid-flight so a stale/partial list never lands in the cache.
+      if (signal.aborted) throw new Error('superseded');
+      return result;
+    },
     enabled: scope != null,
     staleTime: 5 * 60_000,
   });
 
   const filesTruncated = fileList?.success ? fileList.truncated : false;
+  // Surface a failed listing distinctly instead of letting it collapse to an empty
+  // list that reads as "no files" and hides the error.
+  const filesError = fileList && !fileList.success ? fileList.error : null;
 
+  // Debounce only the heavy per-keystroke fuzzy filter over the (up to 20k) file
+  // list; repo picking above stays live because it filters at most ~50 repo names.
+  const debouncedQuery = useDebounce(query, 100);
   const fileResults = useMemo(() => {
     if (!scope) return [];
     const allFiles = fileList?.success ? fileList.files : [];
-    return fuzzyFilterFiles(query, allFiles, FILE_RESULT_LIMIT);
-  }, [scope, query, fileList]);
+    return fuzzyFilterFiles(debouncedQuery, allFiles, FILE_RESULT_LIMIT);
+  }, [scope, debouncedQuery, fileList]);
 
   return {
     scope,
@@ -77,5 +91,6 @@ export function useRepoScope(query: string) {
     fileResults,
     filesLoading,
     filesTruncated,
+    filesError,
   };
 }
