@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useDebounce } from '@renderer/lib/hooks/useDebounce';
 import { rpc } from '@renderer/lib/ipc';
 import { fuzzyFilterFiles, subsequenceScore } from './fuzzy-match';
@@ -31,12 +31,17 @@ export function useRepoScope(query: string) {
   const { isRepoQuery, filter: repoFilter } = parseRepoScopeQuery(query);
   const atMode = !scope && isRepoQuery;
 
-  // Discover repos lazily — the query only runs once the user reaches `@`.
+  // Discover repos lazily — the query only runs once the user reaches `@`. Cache a
+  // real (non-empty) result for the session, but keep an empty or failed one stale so
+  // the next `@` re-scans — the dev root may have been unreachable or not yet mounted.
   const { data: discovery, isFetching: reposLoading } = useQuery({
     queryKey: ['cmdk-repos'],
     queryFn: () => rpc.app.discoverRepos(),
     enabled: atMode,
-    staleTime: 5 * 60_000,
+    staleTime: (query) => {
+      const data = query.state.data;
+      return data?.success && data.repos.length > 0 ? 5 * 60_000 : 0;
+    },
   });
 
   const repoResults = useMemo(() => {
@@ -65,8 +70,20 @@ export function useRepoScope(query: string) {
       return result;
     },
     enabled: scope != null,
-    staleTime: 5 * 60_000,
+    // Keep a good listing for the session, but let a failed one re-fetch on next open.
+    staleTime: (query) => (query.state.data?.success ? 5 * 60_000 : 0),
   });
+
+  // Stop the backend crawl when the scoped repo changes or the palette unmounts, so a
+  // slow crawl doesn't keep running after its result is no longer wanted. The backend
+  // guards the abort by repoPath, so a fast scope switch can't cancel the new crawl.
+  useEffect(() => {
+    const path = scope?.path;
+    if (!path) return;
+    return () => {
+      void rpc.app.cancelRepoFilesCrawl({ repoPath: path });
+    };
+  }, [scope?.path]);
 
   const filesTruncated = fileList?.success ? fileList.truncated : false;
   // Surface a failed listing distinctly instead of letting it collapse to an empty

@@ -111,20 +111,9 @@ describe('listRepoFiles', () => {
     expect(result.files.length).toBeLessThanOrEqual(2);
   });
 
-  it('excludes build, artifact, worktree, and library dirs — not just node_modules', async () => {
+  it('hard-excludes dependency and generated dirs (node_modules, dist, build, coverage)', async () => {
     fs.writeFileSync(path.join(repo, 'index.ts'), 'x');
-    for (const junk of [
-      'dist',
-      'build',
-      'out',
-      'coverage',
-      'target',
-      'vendor',
-      'venv',
-      '__pycache__',
-      'Library',
-      'worktrees',
-    ]) {
+    for (const junk of ['node_modules', 'dist', 'build', 'coverage']) {
       fs.mkdirSync(path.join(repo, junk));
       fs.writeFileSync(path.join(repo, junk, 'artifact.js'), 'x');
     }
@@ -132,15 +121,51 @@ describe('listRepoFiles', () => {
     expect(result.files).toEqual(['index.ts']);
   });
 
-  it('honours the repo .gitignore', async () => {
-    fs.writeFileSync(path.join(repo, '.gitignore'), 'generated/\n*.log\nsecret.txt\n');
+  it('does NOT hard-exclude potentially-tracked dirs — .gitignore is the source of truth', async () => {
+    // A perf-default static ignore must not override git-tracked files: a source dir
+    // named out/target, or a tracked vendor/venv/__pycache__/Library, stays findable.
+    fs.writeFileSync(path.join(repo, 'index.ts'), 'x');
+    for (const maybeTracked of ['out', 'target', 'vendor', 'venv', '__pycache__', 'Library']) {
+      fs.mkdirSync(path.join(repo, maybeTracked));
+      fs.writeFileSync(path.join(repo, maybeTracked, 'src.ts'), 'x');
+    }
+    const result = await listRepoFiles(repo);
+    expect(result.files.sort()).toEqual([
+      'Library/src.ts',
+      '__pycache__/src.ts',
+      'index.ts',
+      'out/src.ts',
+      'target/src.ts',
+      'vendor/src.ts',
+      'venv/src.ts',
+    ]);
+  });
+
+  it('honours the repo-root .gitignore for both files and directories', async () => {
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'generated/\n*.log\nsecret.txt\nvendor/\n');
     fs.writeFileSync(path.join(repo, 'index.ts'), 'x');
     fs.writeFileSync(path.join(repo, 'debug.log'), 'x');
     fs.writeFileSync(path.join(repo, 'secret.txt'), 'x');
     fs.mkdirSync(path.join(repo, 'generated'));
     fs.writeFileSync(path.join(repo, 'generated', 'out.ts'), 'x');
+    // A gitignored vendor/ IS pruned — .gitignore wins over "keep tracked dirs".
+    fs.mkdirSync(path.join(repo, 'vendor'));
+    fs.writeFileSync(path.join(repo, 'vendor', 'dep.ts'), 'x');
     const result = await listRepoFiles(repo);
     expect(result.files.sort()).toEqual(['index.ts']);
+  });
+
+  it('honours nested per-package .gitignore in a monorepo', async () => {
+    // Root source is kept; each package prunes its own build output via its own
+    // .gitignore, so generated files never bury source or eat the entry budget.
+    fs.mkdirSync(path.join(repo, 'apps', 'web', 'dist-out'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'apps', 'web', '.gitignore'), 'dist-out/\n');
+    fs.writeFileSync(path.join(repo, 'apps', 'web', 'index.ts'), 'x');
+    fs.writeFileSync(path.join(repo, 'apps', 'web', 'dist-out', 'bundle.js'), 'x');
+    fs.mkdirSync(path.join(repo, 'packages', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'packages', 'lib', 'main.ts'), 'x');
+    const result = await listRepoFiles(repo);
+    expect(result.files.sort()).toEqual(['apps/web/index.ts', 'packages/lib/main.ts']);
   });
 
   it('counts only files toward the entry cap — directories do not consume it', async () => {
@@ -154,7 +179,7 @@ describe('listRepoFiles', () => {
     expect(result.truncated).toBe(false);
   });
 
-  it('excludes symlinked directories but keeps symlinked files', async () => {
+  it('excludes symlinked directories but keeps in-repo symlinked files', async () => {
     fs.mkdirSync(path.join(repo, 'real-dir'));
     fs.writeFileSync(path.join(repo, 'real-dir', 'inner.ts'), 'x');
     fs.writeFileSync(path.join(repo, 'real-file.ts'), 'x');
@@ -167,12 +192,45 @@ describe('listRepoFiles', () => {
     expect(result.files.some((f) => f.startsWith('link-dir'))).toBe(false);
   });
 
-  it('stops early when the signal is already aborted', async () => {
+  it('drops a symlink whose target escapes the repo boundary', async () => {
+    // A symlink pointing outside the repo must not become a peekable in-repo path.
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-'));
+    try {
+      fs.writeFileSync(path.join(outside, 'secret.txt'), 'x');
+      fs.writeFileSync(path.join(repo, 'index.ts'), 'x');
+      fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(repo, 'escape.txt'));
+      const result = await listRepoFiles(repo);
+      expect(result.files).toEqual(['index.ts']);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('does not flag truncation when the file count merely equals the cap', async () => {
+    // Off-by-one guard: a fully-walked tree with exactly `maxEntries` files is complete.
+    for (const f of ['a.ts', 'b.ts', 'c.ts']) fs.writeFileSync(path.join(repo, f), 'x');
+    const result = await listRepoFiles(repo, { maxEntries: 3 });
+    expect(result.files.sort()).toEqual(['a.ts', 'b.ts', 'c.ts']);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('reports an aborted crawl as truncated, never as a complete list', async () => {
     fs.writeFileSync(path.join(repo, 'index.ts'), 'x');
     const controller = new AbortController();
     controller.abort();
     const result = await listRepoFiles(repo, { signal: controller.signal });
     expect(result.files).toEqual([]);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('reports truncation when the wall-clock budget is exceeded', async () => {
+    for (let i = 0; i < 500; i++) fs.writeFileSync(path.join(repo, `f${i}.ts`), 'x');
+    const result = await listRepoFiles(repo, { timeBudgetMs: 1 });
+    expect(result.truncated).toBe(true);
+  });
+
+  it('throws when the repo root cannot be read, rather than reporting an empty repo', async () => {
+    await expect(listRepoFiles(path.join(repo, 'does-not-exist'))).rejects.toThrow();
   });
 });
 

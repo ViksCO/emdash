@@ -7,8 +7,9 @@ import { appService } from './service';
 
 // Only one repo scope is active in the palette at a time, so a new file listing
 // supersedes any still-running crawl. Aborting the previous one keeps quick scope
-// switches from stacking concurrent full crawls.
-let activeRepoFilesCrawl: AbortController | null = null;
+// switches from stacking concurrent full crawls. Tagged with its repoPath so an
+// explicit cancel (palette closed / scope cleared) only aborts the crawl it meant to.
+let activeRepoFilesCrawl: { repoPath: string; abort: AbortController } | null = null;
 
 export const appController = createRPCController({
   openExternal: async (url: string) => {
@@ -102,16 +103,27 @@ export const appController = createRPCController({
     }
   },
   listRepoFiles: async (args: { repoPath: string }) => {
-    activeRepoFilesCrawl?.abort();
+    activeRepoFilesCrawl?.abort.abort();
     const abort = new AbortController();
-    activeRepoFilesCrawl = abort;
+    const crawl = { repoPath: args.repoPath, abort };
+    activeRepoFilesCrawl = crawl;
     try {
       const result = await listRepoFiles(args.repoPath, { signal: abort.signal });
       return { success: true as const, ...result };
     } catch (error) {
       return { success: false as const, error: error instanceof Error ? error.message : String(error) };
     } finally {
-      if (activeRepoFilesCrawl === abort) activeRepoFilesCrawl = null;
+      if (activeRepoFilesCrawl === crawl) activeRepoFilesCrawl = null;
     }
+  },
+  // Stop the in-flight crawl when the renderer no longer wants it (palette closed or
+  // scope cleared). Guarded by repoPath so a request that lost the race — a newer
+  // scope's crawl is already active — is a no-op rather than aborting the new one.
+  cancelRepoFilesCrawl: (args: { repoPath: string }) => {
+    if (activeRepoFilesCrawl?.repoPath === args.repoPath) {
+      activeRepoFilesCrawl.abort.abort();
+      activeRepoFilesCrawl = null;
+    }
+    return { success: true as const };
   },
 });

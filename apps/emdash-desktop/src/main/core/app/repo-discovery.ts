@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
-import ignore from 'ignore';
+import { LocalFileSystem } from '@main/core/fs/impl/local-fs';
 
 export interface DiscoveredRepo {
   /** Directory name, shown in the palette. */
@@ -43,25 +43,9 @@ const DEFAULT_MAX_DEPTH = 4;
 // not directories, so the effective ceiling is the number of findable files.
 const DEFAULT_MAX_ENTRIES = 20_000;
 
-// Directory names never worth descending into while listing a repo's files:
-// dependency trees, build/artifact output, worktree roots, and heavy library
-// dirs. Broader than discovery's set because here we walk *inside* a repo, where
-// these dirs hold thousands of files that would bury real source and exhaust the
-// entry budget. Hidden dirs (.git, .next, .cache, .venv, …) are skipped separately
-// by the crawl, so only visible names need listing here.
-const FILE_CRAWL_IGNORES = new Set([
-  'node_modules',
-  'worktrees',
-  'dist',
-  'build',
-  'out',
-  'coverage',
-  'target',
-  'vendor',
-  'venv',
-  '__pycache__',
-  'Library',
-]);
+// Wall-clock ceiling for one repo's file crawl, so a slow or pathologically deep
+// tree degrades to a truncated list instead of hanging the palette's file query.
+const DEFAULT_TIME_BUDGET_MS = 10_000;
 
 /** The v1 default dev root. Configurable per call; this is the fallback. */
 export function defaultDevRoot(): string {
@@ -112,89 +96,38 @@ export async function discoverGitRepos(
   return repos;
 }
 
-/** Load the repo-root `.gitignore` matcher, or null if there is none. */
-async function loadGitIgnore(repoPath: string): Promise<ReturnType<typeof ignore> | null> {
-  try {
-    const content = await fs.readFile(join(repoPath, '.gitignore'), 'utf-8');
-    return ignore().add(content);
-  } catch {
-    return null; // no readable .gitignore — the static ignore set still applies
-  }
-}
-
 /**
  * Enumerate the files of one repo as repo-relative paths — the in-memory list the
- * renderer fuzzy-filters per keystroke. A single readdir-based crawl that:
- *   - reads dirents only (no per-entry `stat`), so it doesn't burn a syscall per file;
- *   - skips hidden entries, the build/dependency/worktree dirs in FILE_CRAWL_IGNORES,
- *     and anything the repo's `.gitignore` excludes, so artifact trees don't flood it;
- *   - excludes symlinked directories (they'd otherwise be kept as bogus "files" and
- *     throw EISDIR on peek) while keeping symlinked files;
- *   - counts only files toward `maxEntries` and stops early once aborted or capped.
+ * renderer fuzzy-filters per keystroke. Delegates to the shared `LocalFileSystem`
+ * crawl so the peek reuses its bounds (entry cap + wall-clock budget), cancellation,
+ * static ignore set, `.gitignore` handling (repo-root plus nested), and repo-root
+ * symlink boundary rather than maintaining a parallel crawler.
+ *
+ * An unreadable or missing repo root is surfaced as a thrown error (not an empty
+ * "success"), so the palette shows its "couldn't read files" state instead of what
+ * looks like an empty repo. Per-subdirectory read failures during the crawl are
+ * tolerated (skipped) as before.
  */
 export async function listRepoFiles(
   repoPath: string,
-  options: { maxEntries?: number; signal?: AbortSignal } = {}
+  options: { maxEntries?: number; timeBudgetMs?: number; signal?: AbortSignal } = {}
 ): Promise<RepoFileList> {
-  const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
-  const signal = options.signal;
-  const gitIgnore = await loadGitIgnore(repoPath);
+  // Probe the root first: if we can't read it at all, propagate the failure.
+  await fs.readdir(repoPath);
 
-  const files: string[] = [];
-  let truncated = false;
+  const provider = new LocalFileSystem(repoPath);
+  const result = await provider.list('', {
+    recursive: true,
+    maxEntries: options.maxEntries ?? DEFAULT_MAX_ENTRIES,
+    timeBudgetMs: options.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS,
+    filesOnly: true,
+    pathsOnly: true,
+    respectGitignore: true,
+    restrictSymlinksToRoot: true,
+    signal: options.signal,
+  });
 
-  const walk = async (dir: string, relBase: string): Promise<void> => {
-    if (truncated || signal?.aborted) return;
-
-    let items;
-    try {
-      items = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    for (const item of items) {
-      if (truncated || signal?.aborted) return;
-
-      const { name } = item;
-      if (name.startsWith('.')) continue; // hidden files/dirs, incl. .git internals
-
-      const relPath = relBase ? `${relBase}/${name}` : name;
-
-      if (item.isDirectory()) {
-        if (FILE_CRAWL_IGNORES.has(name)) continue;
-        // Trailing slash so `dir/`-style .gitignore patterns prune the directory.
-        if (gitIgnore?.ignores(`${relPath}/`)) continue;
-        await walk(join(dir, name), relPath);
-        continue;
-      }
-
-      if (gitIgnore?.ignores(relPath)) continue;
-
-      if (item.isFile()) {
-        files.push(relPath);
-      } else if (item.isSymbolicLink()) {
-        // A dir symlink reports isDirectory()===false, so it would slip through as a
-        // "file" and throw EISDIR on peek. Resolve it once: keep a symlinked file,
-        // skip a symlinked dir (and don't follow it — cycle risk).
-        try {
-          if ((await fs.stat(join(dir, name))).isFile()) files.push(relPath);
-        } catch {
-          // Broken symlink — skip.
-        }
-      } else {
-        continue; // sockets, FIFOs, devices — not peekable
-      }
-
-      if (files.length >= maxEntries) {
-        truncated = true;
-        return;
-      }
-    }
-  };
-
-  await walk(repoPath, '');
-  return { files, truncated };
+  return { files: result.entries.map((entry) => entry.path), truncated: Boolean(result.truncated) };
 }
 
 // Session cache for discovery — repeated `@` opens are instant. Keyed by root so

@@ -134,6 +134,129 @@ describe('LocalFileSystem', () => {
       expect(result.entries[0].mtime).toBeInstanceOf(Date);
       expect(result.entries[0].mode).toBeDefined();
     });
+
+    describe('opt-in crawl options', () => {
+      it('filesOnly omits directory entries and counts only files toward the cap', async () => {
+        for (let i = 0; i < 5; i++) fs.mkdirSync(path.join(tempDir, `d${i}`));
+        for (const f of ['a.ts', 'b.ts', 'c.ts']) fs.writeFileSync(path.join(tempDir, f), 'x');
+
+        const result = await fsService.list('', {
+          recursive: true,
+          filesOnly: true,
+          maxEntries: 5,
+        });
+
+        expect(result.entries.every((e) => e.type === 'file')).toBe(true);
+        expect(result.entries.map((e) => e.path).sort()).toEqual(['a.ts', 'b.ts', 'c.ts']);
+        expect(result.truncated).toBe(false);
+      });
+
+      it('pathsOnly returns entries without stat metadata', async () => {
+        fs.writeFileSync(path.join(tempDir, 'a.ts'), 'x');
+
+        const result = await fsService.list('', { filesOnly: true, pathsOnly: true });
+
+        expect(result.entries).toHaveLength(1);
+        expect(result.entries[0].path).toBe('a.ts');
+        expect(result.entries[0].size).toBeUndefined();
+        expect(result.entries[0].mtime).toBeUndefined();
+      });
+
+      it('does not flag truncation when the count merely equals the cap on a complete walk', async () => {
+        for (const f of ['a.ts', 'b.ts', 'c.ts']) fs.writeFileSync(path.join(tempDir, f), 'x');
+
+        const result = await fsService.list('', { filesOnly: true, maxEntries: 3 });
+
+        expect(result.entries).toHaveLength(3);
+        expect(result.truncated).toBe(false);
+      });
+
+      it('respectGitignore prunes gitignored files and directories', async () => {
+        fs.writeFileSync(path.join(tempDir, '.gitignore'), 'build/\n*.log\n');
+        fs.writeFileSync(path.join(tempDir, 'index.ts'), 'x');
+        fs.writeFileSync(path.join(tempDir, 'debug.log'), 'x');
+        fs.mkdirSync(path.join(tempDir, 'build'));
+        fs.writeFileSync(path.join(tempDir, 'build', 'out.js'), 'x');
+
+        const result = await fsService.list('', {
+          recursive: true,
+          filesOnly: true,
+          respectGitignore: true,
+        });
+
+        expect(result.entries.map((e) => e.path).sort()).toEqual(['index.ts']);
+      });
+
+      it('respectGitignore applies nested per-directory .gitignore', async () => {
+        fs.mkdirSync(path.join(tempDir, 'pkg', 'out'), { recursive: true });
+        fs.writeFileSync(path.join(tempDir, 'pkg', '.gitignore'), 'out/\n');
+        fs.writeFileSync(path.join(tempDir, 'pkg', 'main.ts'), 'x');
+        fs.writeFileSync(path.join(tempDir, 'pkg', 'out', 'bundle.js'), 'x');
+
+        const result = await fsService.list('', {
+          recursive: true,
+          filesOnly: true,
+          respectGitignore: true,
+        });
+
+        expect(result.entries.map((e) => e.path).sort()).toEqual(['pkg/main.ts']);
+      });
+
+      it('restrictSymlinksToRoot skips symlinked dirs and keeps in-root symlinked files', async () => {
+        fs.mkdirSync(path.join(tempDir, 'real-dir'));
+        fs.writeFileSync(path.join(tempDir, 'real-dir', 'inner.ts'), 'x');
+        fs.writeFileSync(path.join(tempDir, 'real-file.ts'), 'x');
+        fs.symlinkSync(path.join(tempDir, 'real-dir'), path.join(tempDir, 'link-dir'));
+        fs.symlinkSync(path.join(tempDir, 'real-file.ts'), path.join(tempDir, 'link-file.ts'));
+
+        const result = await fsService.list('', {
+          recursive: true,
+          filesOnly: true,
+          restrictSymlinksToRoot: true,
+        });
+
+        expect(result.entries.map((e) => e.path).sort()).toEqual([
+          'link-file.ts',
+          'real-dir/inner.ts',
+          'real-file.ts',
+        ]);
+      });
+
+      it('restrictSymlinksToRoot drops a symlink whose target escapes the root', async () => {
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'fs-outside-'));
+        try {
+          fs.writeFileSync(path.join(outside, 'secret.txt'), 'x');
+          fs.writeFileSync(path.join(tempDir, 'index.ts'), 'x');
+          fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(tempDir, 'escape.txt'));
+
+          const result = await fsService.list('', {
+            recursive: true,
+            filesOnly: true,
+            restrictSymlinksToRoot: true,
+          });
+
+          expect(result.entries.map((e) => e.path)).toEqual(['index.ts']);
+        } finally {
+          fs.rmSync(outside, { recursive: true, force: true });
+        }
+      });
+
+      it('stops and reports truncated when the external signal is aborted', async () => {
+        fs.writeFileSync(path.join(tempDir, 'index.ts'), 'x');
+        const controller = new AbortController();
+        controller.abort();
+
+        const result = await fsService.list('', {
+          recursive: true,
+          filesOnly: true,
+          signal: controller.signal,
+        });
+
+        expect(result.entries).toEqual([]);
+        expect(result.truncated).toBe(true);
+        expect(result.truncateReason).toBe('aborted');
+      });
+    });
   });
 
   describe('read', () => {

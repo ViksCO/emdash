@@ -140,6 +140,34 @@ const IMAGE_MIME_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
 };
 
+// One directory's `.gitignore`, tagged with the repo-relative directory it sits in
+// so its patterns are tested relative to that directory (proper nested semantics).
+interface IgnoreLayer {
+  base: string;
+  matcher: ReturnType<typeof ignore>;
+}
+
+/**
+ * Test a repo-relative path against a stack of `.gitignore` layers. Each layer's
+ * patterns are matched relative to the directory the `.gitignore` lives in.
+ * Directories are tested with a trailing slash so `dir/`-style patterns prune them.
+ */
+function isIgnoredByLayers(layers: IgnoreLayer[], rel: string, isDir: boolean): boolean {
+  for (const { base, matcher } of layers) {
+    const sub = base ? rel.slice(base.length + 1) : rel;
+    if (!sub) continue;
+    if (matcher.ignores(isDir ? `${sub}/` : sub)) return true;
+  }
+  return false;
+}
+
+/** True if `candidate` is `root` itself or nested inside it (path-boundary safe). */
+function isPathInsideRootDir(candidate: string, root: string): boolean {
+  if (candidate === root) return true;
+  const rootWithSep = root.endsWith(sep) ? root : root + sep;
+  return candidate.startsWith(rootWithSep);
+}
+
 export class LocalFileSystem implements FileSystemProvider {
   private listAbort: AbortController | null = null;
 
@@ -229,15 +257,37 @@ export class LocalFileSystem implements FileSystemProvider {
     const entries: FileEntry[] = [];
     const maxEntries = options.maxEntries || 10000;
     const timeBudgetMs = options.timeBudgetMs || 30000;
+    const { filesOnly, pathsOnly, respectGitignore, restrictSymlinksToRoot } = options;
 
     const abort = new AbortController();
     this.listAbort = abort;
+    // Stop for either the provider's own cancel token or the caller's external signal.
+    const isAborted = () => abort.signal.aborted || options.signal?.aborted === true;
+
+    // Realpath the root once so the symlink boundary check compares against the same
+    // resolved form realpath() returns for targets (handles a symlinked root path).
+    let realRoot = this.projectPath;
+    if (restrictSymlinksToRoot) {
+      try {
+        realRoot = await fs.realpath(this.projectPath);
+      } catch {
+        // Fall back to the resolved projectPath if it can't be realpathed.
+      }
+    }
 
     let truncated = false;
-    let truncateReason: 'maxEntries' | 'timeBudget' | undefined;
+    let truncateReason: FileListResult['truncateReason'];
 
-    const listDir = async (dirPath: string, recursive: boolean) => {
-      if (abort.signal.aborted) return;
+    const listDir = async (
+      dirPath: string,
+      recursive: boolean,
+      ignoreLayers: IgnoreLayer[]
+    ): Promise<void> => {
+      if (isAborted()) {
+        truncated = true;
+        truncateReason = 'aborted';
+        return;
+      }
 
       if (Date.now() - startTime > timeBudgetMs) {
         truncated = true;
@@ -258,8 +308,21 @@ export class LocalFileSystem implements FileSystemProvider {
         return;
       }
 
+      // Layer this directory's own .gitignore (if any) onto the inherited stack, so
+      // per-package rules apply to everything below without leaking sideways.
+      let layers = ignoreLayers;
+      if (respectGitignore) {
+        const dirRel = this.relPath(dirPath);
+        const local = await this.loadGitignore(dirRel);
+        if (local) layers = [...ignoreLayers, { base: dirRel, matcher: local }];
+      }
+
       for (const item of items) {
-        if (abort.signal.aborted) return;
+        if (isAborted()) {
+          truncated = true;
+          truncateReason = 'aborted';
+          return;
+        }
 
         if (entries.length % 100 === 0 && Date.now() - startTime > timeBudgetMs) {
           truncated = true;
@@ -276,43 +339,75 @@ export class LocalFileSystem implements FileSystemProvider {
         }
 
         const itemPath = join(dirPath, item.name);
+        const rel = this.relPath(itemPath);
 
-        try {
-          const stat = await fs.stat(itemPath);
-          const entry: FileEntry = {
-            path: this.relPath(itemPath),
-            type: item.isDirectory() ? 'dir' : 'file',
-            size: stat.size,
-            mtime: stat.mtime,
-            ctime: stat.ctime,
-            mode: stat.mode,
-          };
-
-          if (options.filter) {
-            const filterRegex = new RegExp(options.filter);
-            if (!filterRegex.test(item.name)) {
-              continue;
-            }
+        // Classify the entry. Symlinks need care: by default a symlink reports as a
+        // non-directory dirent, so it lands as a "file" entry (legacy behavior). Under
+        // restrictSymlinksToRoot the target is resolved once — a symlinked directory is
+        // skipped (cycle risk, and it would throw EISDIR on read), and a symlink whose
+        // target escapes the root or is broken is dropped.
+        let type: 'file' | 'dir';
+        let followableDir = false;
+        if (item.isSymbolicLink() && restrictSymlinksToRoot) {
+          let realTarget: string;
+          try {
+            realTarget = await fs.realpath(itemPath);
+          } catch {
+            continue; // broken symlink
           }
+          if (!isPathInsideRootDir(realTarget, realRoot)) continue; // escapes the repo boundary
+          let targetStat;
+          try {
+            targetStat = await fs.stat(itemPath);
+          } catch {
+            continue;
+          }
+          if (!targetStat.isFile()) continue; // symlinked dir / socket / fifo — not a peekable file
+          type = 'file';
+        } else if (item.isDirectory()) {
+          type = 'dir';
+          followableDir = true;
+        } else {
+          type = 'file';
+        }
 
-          entries.push(entry);
+        // Existing filter semantics: a name that doesn't match is skipped entirely,
+        // directories included (so recursion stops at non-matching dirs too).
+        if (options.filter) {
+          const filterRegex = new RegExp(options.filter);
+          if (!filterRegex.test(item.name)) {
+            continue;
+          }
+        }
 
+        if (respectGitignore && isIgnoredByLayers(layers, rel, type === 'dir')) {
+          continue;
+        }
+
+        if (!(type === 'dir' && filesOnly)) {
+          // Check the cap before pushing so a complete walk of exactly `maxEntries`
+          // files isn't falsely reported as truncated.
           if (entries.length >= maxEntries) {
             truncated = true;
             truncateReason = 'maxEntries';
             return;
           }
-
-          if (recursive && item.isDirectory()) {
-            await listDir(itemPath, true);
+          const entry = await this.buildEntry(itemPath, type, pathsOnly);
+          if (entry) {
+            entries.push(entry);
+          } else if (type === 'dir') {
+            // A directory we can't stat is skipped entirely, recursion included (legacy).
+            continue;
           }
-        } catch {
-          // Skip entries we can't stat
+        }
+
+        if (recursive && followableDir) {
+          await listDir(itemPath, true, layers);
         }
       }
     };
 
-    await listDir(fullPath, options.recursive || false);
+    await listDir(fullPath, options.recursive || false, []);
 
     if (this.listAbort === abort) {
       this.listAbort = null;
@@ -325,6 +420,32 @@ export class LocalFileSystem implements FileSystemProvider {
       truncateReason,
       durationMs: Date.now() - startTime,
     };
+  }
+
+  /** Build a FileEntry, statting for metadata unless the caller only wants paths. */
+  private async buildEntry(
+    fullPath: string,
+    type: 'file' | 'dir',
+    pathsOnly?: boolean
+  ): Promise<FileEntry | null> {
+    const path = this.relPath(fullPath);
+    if (pathsOnly) return { path, type };
+    try {
+      const stat = await fs.stat(fullPath);
+      return { path, type, size: stat.size, mtime: stat.mtime, ctime: stat.ctime, mode: stat.mode };
+    } catch {
+      return null; // can't stat — skip, matching legacy behavior
+    }
+  }
+
+  /** Load the `.gitignore` in `relDir` (repo-relative), or null if absent/unreadable. */
+  private async loadGitignore(relDir: string): Promise<ReturnType<typeof ignore> | null> {
+    try {
+      const content = await fs.readFile(join(this.projectPath, relDir, '.gitignore'), 'utf-8');
+      return ignore().add(content);
+    } catch {
+      return null;
+    }
   }
 
   async read(path: string, maxBytes: number = 200 * 1024): Promise<ReadResult> {
