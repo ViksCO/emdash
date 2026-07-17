@@ -5,6 +5,11 @@ import type { OpenInAppId } from '@shared/openInApps';
 import { defaultDevRoot, discoverGitReposCached, listRepoFiles } from './repo-discovery';
 import { appService } from './service';
 
+// Only one repo scope is active in the palette at a time, so a new file listing
+// supersedes any still-running crawl. Aborting the previous one keeps quick scope
+// switches from stacking concurrent full crawls.
+let activeRepoFilesCrawl: AbortController | null = null;
+
 export const appController = createRPCController({
   openExternal: async (url: string) => {
     try {
@@ -97,11 +102,16 @@ export const appController = createRPCController({
     }
   },
   listRepoFiles: async (args: { repoPath: string }) => {
+    activeRepoFilesCrawl?.abort();
+    const abort = new AbortController();
+    activeRepoFilesCrawl = abort;
     try {
-      const result = await listRepoFiles(args.repoPath);
+      const result = await listRepoFiles(args.repoPath, { signal: abort.signal });
       return { success: true as const, ...result };
     } catch (error) {
       return { success: false as const, error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      if (activeRepoFilesCrawl === abort) activeRepoFilesCrawl = null;
     }
   },
 });

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { discoverGitRepos, listRepoFiles } from './repo-discovery';
+import { discoverGitRepos, discoverGitReposCached, listRepoFiles } from './repo-discovery';
 
 function makeRepo(dir: string, gitAs: 'dir' | 'file' = 'dir') {
   fs.mkdirSync(dir, { recursive: true });
@@ -109,5 +109,102 @@ describe('listRepoFiles', () => {
     const result = await listRepoFiles(repo, { maxEntries: 2 });
     expect(result.truncated).toBe(true);
     expect(result.files.length).toBeLessThanOrEqual(2);
+  });
+
+  it('excludes build, artifact, worktree, and library dirs — not just node_modules', async () => {
+    fs.writeFileSync(path.join(repo, 'index.ts'), 'x');
+    for (const junk of [
+      'dist',
+      'build',
+      'out',
+      'coverage',
+      'target',
+      'vendor',
+      'venv',
+      '__pycache__',
+      'Library',
+      'worktrees',
+    ]) {
+      fs.mkdirSync(path.join(repo, junk));
+      fs.writeFileSync(path.join(repo, junk, 'artifact.js'), 'x');
+    }
+    const result = await listRepoFiles(repo);
+    expect(result.files).toEqual(['index.ts']);
+  });
+
+  it('honours the repo .gitignore', async () => {
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'generated/\n*.log\nsecret.txt\n');
+    fs.writeFileSync(path.join(repo, 'index.ts'), 'x');
+    fs.writeFileSync(path.join(repo, 'debug.log'), 'x');
+    fs.writeFileSync(path.join(repo, 'secret.txt'), 'x');
+    fs.mkdirSync(path.join(repo, 'generated'));
+    fs.writeFileSync(path.join(repo, 'generated', 'out.ts'), 'x');
+    const result = await listRepoFiles(repo);
+    expect(result.files.sort()).toEqual(['index.ts']);
+  });
+
+  it('counts only files toward the entry cap — directories do not consume it', async () => {
+    // Old behaviour counted dirs too, so many empty dirs could exhaust the cap
+    // before real files were reached. Here 10 dirs + 3 files with a cap of 5 must
+    // still surface all 3 files.
+    for (let i = 0; i < 10; i++) fs.mkdirSync(path.join(repo, `d${i}`));
+    for (const f of ['a.ts', 'b.ts', 'c.ts']) fs.writeFileSync(path.join(repo, f), 'x');
+    const result = await listRepoFiles(repo, { maxEntries: 5 });
+    expect(result.files.sort()).toEqual(['a.ts', 'b.ts', 'c.ts']);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('excludes symlinked directories but keeps symlinked files', async () => {
+    fs.mkdirSync(path.join(repo, 'real-dir'));
+    fs.writeFileSync(path.join(repo, 'real-dir', 'inner.ts'), 'x');
+    fs.writeFileSync(path.join(repo, 'real-file.ts'), 'x');
+    fs.symlinkSync(path.join(repo, 'real-dir'), path.join(repo, 'link-dir'));
+    fs.symlinkSync(path.join(repo, 'real-file.ts'), path.join(repo, 'link-file.ts'));
+
+    const result = await listRepoFiles(repo);
+
+    expect(result.files.sort()).toEqual(['link-file.ts', 'real-dir/inner.ts', 'real-file.ts']);
+    expect(result.files.some((f) => f.startsWith('link-dir'))).toBe(false);
+  });
+
+  it('stops early when the signal is already aborted', async () => {
+    fs.writeFileSync(path.join(repo, 'index.ts'), 'x');
+    const controller = new AbortController();
+    controller.abort();
+    const result = await listRepoFiles(repo, { signal: controller.signal });
+    expect(result.files).toEqual([]);
+  });
+});
+
+describe('discoverGitReposCached', () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'repo-discovery-cached-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('does not persist an empty result, so repos appear once the root is populated', async () => {
+    expect(await discoverGitReposCached(root)).toEqual([]);
+    makeRepo(path.join(root, 'alpha'));
+    // Without an explicit refresh: an empty result must not have been cached for
+    // the full TTL, or this would still return [].
+    expect((await discoverGitReposCached(root)).map((r) => r.name)).toEqual(['alpha']);
+  });
+
+  it('serves a non-empty result from cache on the next call', async () => {
+    makeRepo(path.join(root, 'beta'));
+    expect((await discoverGitReposCached(root)).map((r) => r.name)).toEqual(['beta']);
+    // Add a second repo; the cached result should still be served (no refresh).
+    makeRepo(path.join(root, 'gamma'));
+    expect((await discoverGitReposCached(root)).map((r) => r.name)).toEqual(['beta']);
+    // An explicit refresh picks up the new repo.
+    expect((await discoverGitReposCached(root, { refresh: true })).map((r) => r.name)).toEqual([
+      'beta',
+      'gamma',
+    ]);
   });
 });
