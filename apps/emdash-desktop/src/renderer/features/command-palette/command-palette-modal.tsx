@@ -14,11 +14,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { conversationRegistry } from '@renderer/features/conversations/stores/conversation-registry';
 import { FilePreview } from '@renderer/features/file-peek/file-preview';
 import { useAppSettingsKey } from '@renderer/features/settings/use-app-settings-key';
-import {
-  getTaskStore,
-  getTaskView,
-  getWorkspaceForTask,
-} from '@renderer/features/tasks/stores/task-selectors';
+import { getTaskStore, getTaskView } from '@renderer/features/tasks/stores/task-selectors';
 import { workspaceRegistry } from '@renderer/features/tasks/stores/workspace-registry';
 import { commandRegistry } from '@renderer/lib/commands/registry';
 import { OpenInMenu } from '@renderer/lib/components/titlebar/open-in-menu';
@@ -290,10 +286,9 @@ export function CommandPaletteModal({
 
   // Resolve a workspace file result's absolute path and peek it.
   const peekFile = (file: SearchItem) => {
-    if (!file.projectId || !file.taskId) return;
-    const workspace = getWorkspaceForTask(file.projectId, file.taskId);
-    if (!workspace?.path) return;
-    openPeek(`${workspace.path}/${file.id}`);
+    // file.id from the workspace file index is already an absolute path (the same
+    // value handleOpenFile passes straight to pane.open), so peek it directly.
+    openPeek(file.id);
   };
 
   // Peek a file inside the scoped repo (path relative to the repo root).
