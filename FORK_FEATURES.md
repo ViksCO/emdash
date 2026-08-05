@@ -29,9 +29,14 @@ Never let a row silently disappear.
 1. **Read this file.** For each row above, know what "carried" looks like before the merge.
 2. **Merge upstream in a worktree.** Never in the primary checkout while `pnpm dev` is running.
 3. **Resolve conflicts** aiming to keep every row above `carried`. If upstream restructured code a row depended on, port the behavior to the new location and record the outcome as `reimplemented`.
-4. **Smoke-check every row** before advancing `main`. Manual smoke is fine for UI-heavy rows; add tests where cheap.
-5. **Preserve the merge commit's ancestry.** Never squash the upstream sync merge — that flattens the parent link that keeps the *next* sync small. Fast-forward or merge into `main`; don't `reset --hard`.
-6. **Record outcomes.** After the sync, update the "outcome" column for the release you synced to (rows are `carried` by default; anything else needs an entry).
+4. **Two-sided deletion audit — the silent-loss vectors conflict markers don't show.** Walking the table catches feature-level loss; these two catch break-level loss that merges cleanly and even passes typecheck:
+   - **Modify/delete conflicts** — `git diff --name-only --diff-filter=U`, then `git ls-files -u <path>` shows stages 1+2 only (no stage 3): upstream deleted a file the fork had patched. Port the behavior to its new home and mark `reimplemented` — don't keep the orphan (its callers/imports dangle) or drop it silently (lost feature). The 2026-08 sync hit this on `tab-bar`, the file renderers, and `local-fs`.
+   - **Dead imports in surviving fork-only files** — a fork-only file with no conflict marker can still `import` a module upstream deleted; nothing flags it and a green typecheck can miss it. Grep surviving fork files for imports of now-deleted paths. The 2026-08 sync hit `code-colorizer`→`monaco-code-pool`, `svg-renderer`'s stale `FileTabStore`, and a dangling `resolveHomeJailedPath` / `isPathInsideRoot`.
+5. **Verify with the full local suite, then runtime-smoke against a copy** — CI and typecheck alone aren't enough:
+   - Run `pnpm install --frozen-lockfile && pnpm typecheck && pnpm lint && pnpm -w build` plus the affected unit tests. Typecheck skips unused imports (oxlint catches them); CI skips the full build. Beware masked exit codes — `nx … | tail` reports `tail`'s status, not nx's.
+   - Then smoke every row with real data at zero risk: **stop dev, back up `~/Library/Application Support/emdash-dev`, and launch against a copy** via `EMDASH_DB_FILE=<copy-of-emdash4.db>` (dev mode uses the `emdash-dev` userData dir; the flag redirects only the DB, so the real one is never migrated or opened).
+6. **Preserve the merge commit's ancestry.** Never squash the upstream sync merge — that flattens the parent link that keeps the *next* sync small. Fast-forward or merge into `main`; don't `reset --hard`.
+7. **Record outcomes.** After the sync, update the "outcome" column for the release you synced to (rows are `carried` by default; anything else needs an entry).
 
 ## Recovery: `git rerere`
 
