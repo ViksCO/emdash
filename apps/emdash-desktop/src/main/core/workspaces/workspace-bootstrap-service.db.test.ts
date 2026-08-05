@@ -1,11 +1,11 @@
 import crypto from 'node:crypto';
+import { ok } from '@emdash/shared';
 import { openFixture } from '@tooling/utils/db';
 import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProjectProvider } from '@main/core/projects/project-provider';
-import { projects, workspaces } from '@main/db/schema';
+import { projects, tasks, workspaces } from '@main/db/schema';
 import type { Task } from '@shared/core/tasks/tasks';
-import { ok } from '@shared/lib/result';
 import { WorkspaceBootstrapService } from './workspace-bootstrap-service';
 import { computeWorkspaceKey } from './workspace-key';
 
@@ -53,6 +53,8 @@ describe('WorkspaceBootstrapService', () => {
   let svc: WorkspaceBootstrapService;
 
   beforeEach(async () => {
+    vi.clearAllMocks();
+
     fixture = await openFixture('empty');
     svc = new WorkspaceBootstrapService(fixture.db);
 
@@ -114,12 +116,72 @@ describe('WorkspaceBootstrapService', () => {
       const [ws] = await fixture.db.select().from(workspaces).where(eq(workspaces.id, WS_ID));
       expect(ws.path).toBeNull();
     });
+
+    it('does not mutate branch metadata when reusing an existing workspace by key', async () => {
+      const existingWsId = crypto.randomUUID();
+      const conflictPath = '/worktrees/taken';
+      const conflictKey = computeWorkspaceKey('local', conflictPath);
+      await fixture.db.insert(workspaces).values({
+        id: existingWsId,
+        type: 'local',
+        kind: 'worktree',
+        path: conflictPath,
+        key: conflictKey,
+        branchName: null,
+      });
+
+      const returned = await svc.persistPath(
+        WS_ID,
+        conflictPath,
+        'local',
+        undefined,
+        'task/branch'
+      );
+
+      expect(returned).toBe(existingWsId);
+      const [existing] = await fixture.db
+        .select()
+        .from(workspaces)
+        .where(eq(workspaces.id, existingWsId));
+      expect(existing.branchName).toBeNull();
+    });
+  });
+
+  describe('ensureWorkspaceSetupForTask', () => {
+    it('returns missing-workspace when a task has no workspace id', async () => {
+      await fixture.db.insert(tasks).values({
+        id: 'task-missing-workspace-id',
+        projectId: 'proj-1',
+        name: 'Missing workspace ID',
+        status: 'in_progress',
+      });
+
+      const result = await svc.ensureWorkspaceSetupForTask('task-missing-workspace-id');
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.type).toBe('missing-workspace');
+    });
+
+    it('returns missing-workspace when the workspace row is absent', async () => {
+      await fixture.db.insert(tasks).values({
+        id: 'task-missing-workspace-row',
+        projectId: 'proj-1',
+        name: 'Missing workspace row',
+        status: 'in_progress',
+        workspaceId: 'workspace-missing',
+      });
+
+      const result = await svc.ensureWorkspaceSetupForTask('task-missing-workspace-row');
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error.type).toBe('missing-workspace');
+    });
   });
 
   describe('ensureWorkspaceSetup', () => {
     it('repairs persisted branch worktree paths before acquiring the workspace', async () => {
       const serveBranchWorktree = vi.fn().mockResolvedValue(ok('/worktrees/task-branch'));
-      const existsAbsolute = vi.fn().mockResolvedValue(true);
+      const existsAtAbsolutePath = vi.fn().mockResolvedValue(true);
       const project = {
         projectId: 'proj-1',
         type: 'local',
@@ -128,14 +190,12 @@ describe('WorkspaceBootstrapService', () => {
         settings: {
           get: vi.fn(),
         },
-        repository: {
+        gitRepository: {
           getConfiguredRemotes: vi.fn(),
         },
-        gitFetchService: {},
-        worktreeHost: {
-          existsAbsolute,
-        },
+        gitRepositoryFetchService: {},
         worktreeService: {
+          existsAtAbsolutePath,
           serveBranchWorktree,
         },
       } as unknown as ProjectProvider;
@@ -169,7 +229,174 @@ describe('WorkspaceBootstrapService', () => {
         type: 'local',
         branch: 'main',
       });
-      expect(existsAbsolute).not.toHaveBeenCalledWith('/worktrees/broken-task-branch');
+      expect(existsAtAbsolutePath).not.toHaveBeenCalledWith('/worktrees/broken-task-branch');
+      expect(mocks.acquireWorkspace).toHaveBeenCalled();
+
+      const [ws] = await fixture.db.select().from(workspaces).where(eq(workspaces.id, WS_ID));
+      expect(ws.path).toBe('/worktrees/task-branch');
+      expect(ws.branchName).toBe('task/branch');
+    });
+
+    it('does not acquire an explicit worktree from a stale path without branch intent', async () => {
+      const serveBranchWorktree = vi.fn();
+      const existsAtAbsolutePath = vi.fn().mockResolvedValue(false);
+      const project = {
+        projectId: 'proj-1',
+        type: 'local',
+        repoPath: '/repo',
+        defaultWorkspaceType: { kind: 'local' },
+        settings: {
+          get: vi.fn(),
+        },
+        gitRepository: {
+          getConfiguredRemotes: vi.fn(),
+        },
+        gitRepositoryFetchService: {},
+        worktreeService: {
+          existsAtAbsolutePath,
+          serveBranchWorktree,
+        },
+      } as unknown as ProjectProvider;
+
+      const result = await svc.ensureWorkspaceSetup(
+        {
+          id: WS_ID,
+          type: 'local',
+          kind: 'worktree',
+          path: '/worktrees/missing-task-branch',
+          branchName: null,
+          config: null,
+        },
+        { workspaceIntent: null, workspaceProvider: null },
+        task,
+        project
+      );
+
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error('expected failure');
+      expect(result.error.type).toBe('no-intent');
+      expect(existsAtAbsolutePath).not.toHaveBeenCalled();
+      expect(serveBranchWorktree).not.toHaveBeenCalled();
+      expect(mocks.acquireWorkspace).not.toHaveBeenCalled();
+    });
+
+    it('recovers an explicit worktree from legacy task branch intent', async () => {
+      const serveBranchWorktree = vi.fn();
+      const existsAtAbsolutePath = vi.fn().mockResolvedValue(false);
+      const getWorktreePoolPath = vi.fn().mockResolvedValue('/worktrees');
+      const runWorkspaceSetup = vi.fn().mockResolvedValue(ok({ path: '/worktrees/task-branch' }));
+      const project = {
+        projectId: 'proj-1',
+        type: 'local',
+        repoPath: '/repo',
+        defaultWorkspaceType: { kind: 'local' },
+        settings: {
+          get: vi.fn(),
+        },
+        gitRepository: {
+          getConfiguredRemotes: vi.fn().mockResolvedValue({
+            baseRemote: 'origin',
+            pushRemote: 'origin',
+          }),
+        },
+        gitRepositoryFetchService: {},
+        worktreeService: {
+          existsAtAbsolutePath,
+          serveBranchWorktree,
+          getWorktreePoolPath,
+        },
+        runWorkspaceSetup,
+      } as unknown as ProjectProvider;
+
+      const result = await svc.ensureWorkspaceSetup(
+        {
+          id: WS_ID,
+          type: 'local',
+          kind: 'worktree',
+          path: '/worktrees/missing-task-branch',
+          branchName: null,
+          config: null,
+        },
+        {
+          workspaceIntent: null,
+          workspaceProvider: null,
+          taskBranch: 'task/branch',
+        },
+        task,
+        project
+      );
+
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error('expected success');
+      expect(result.data.path).toBe('/worktrees/task-branch');
+      expect(existsAtAbsolutePath).not.toHaveBeenCalled();
+      expect(serveBranchWorktree).not.toHaveBeenCalled();
+      expect(runWorkspaceSetup).toHaveBeenCalledWith(
+        expect.arrayContaining([{ kind: 'add-worktree', args: { branchName: 'task/branch' } }]),
+        '/worktrees'
+      );
+      expect(mocks.acquireWorkspace).toHaveBeenCalled();
+
+      const [ws] = await fixture.db.select().from(workspaces).where(eq(workspaces.id, WS_ID));
+      expect(ws.path).toBe('/worktrees/task-branch');
+      expect(ws.branchName).toBe('task/branch');
+    });
+
+    it('recovers a legacy workspace with stale path from task branch intent', async () => {
+      const serveBranchWorktree = vi.fn();
+      const existsAtAbsolutePath = vi.fn().mockResolvedValue(false);
+      const getWorktreePoolPath = vi.fn().mockResolvedValue('/worktrees');
+      const runWorkspaceSetup = vi.fn().mockResolvedValue(ok({ path: '/worktrees/task-branch' }));
+      const project = {
+        projectId: 'proj-1',
+        type: 'local',
+        repoPath: '/repo',
+        defaultWorkspaceType: { kind: 'local' },
+        settings: {
+          get: vi.fn(),
+        },
+        gitRepository: {
+          getConfiguredRemotes: vi.fn().mockResolvedValue({
+            baseRemote: 'origin',
+            pushRemote: 'origin',
+          }),
+        },
+        gitRepositoryFetchService: {},
+        worktreeService: {
+          existsAtAbsolutePath,
+          serveBranchWorktree,
+          getWorktreePoolPath,
+        },
+        runWorkspaceSetup,
+      } as unknown as ProjectProvider;
+
+      const result = await svc.ensureWorkspaceSetup(
+        {
+          id: WS_ID,
+          type: 'local',
+          kind: null,
+          path: '/worktrees/missing-task-branch',
+          branchName: null,
+          config: null,
+        },
+        {
+          workspaceIntent: null,
+          workspaceProvider: null,
+          taskBranch: 'task/branch',
+        },
+        task,
+        project
+      );
+
+      expect(result.success).toBe(true);
+      if (!result.success) throw new Error('expected success');
+      expect(result.data.path).toBe('/worktrees/task-branch');
+      expect(existsAtAbsolutePath).toHaveBeenCalledWith('/worktrees/missing-task-branch');
+      expect(serveBranchWorktree).not.toHaveBeenCalled();
+      expect(runWorkspaceSetup).toHaveBeenCalledWith(
+        expect.arrayContaining([{ kind: 'add-worktree', args: { branchName: 'task/branch' } }]),
+        '/worktrees'
+      );
       expect(mocks.acquireWorkspace).toHaveBeenCalled();
 
       const [ws] = await fixture.db.select().from(workspaces).where(eq(workspaces.id, WS_ID));

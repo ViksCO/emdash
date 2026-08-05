@@ -1,87 +1,8 @@
 import os from 'node:os';
+import { AGENT_ENV_VARS } from '@emdash/core/agents/agent-env';
 import type { ResolvedShellProfile } from '@main/core/terminal-shell/types';
 import { detectSshAuthSock } from '@main/utils/shellEnv';
 import { getWindowsEnvValue } from '@main/utils/windows-env';
-
-export const AGENT_ENV_VARS = [
-  'ALL_PROXY',
-  'AMP_API_KEY',
-  'AMP_TOOLBOX',
-  'ANTHROPIC_API_KEY',
-  'ANTHROPIC_AUTH_TOKEN',
-  'ANTHROPIC_BASE_URL',
-  'ANTHROPIC_DEFAULT_HAIKU_MODEL',
-  'ANTHROPIC_DEFAULT_OPUS_MODEL',
-  'ANTHROPIC_DEFAULT_SONNET_MODEL',
-  'ANTHROPIC_MODEL',
-  'ANTHROPIC_SMALL_FAST_MODEL',
-  'AUTOHAND_API_KEY',
-  'AUGMENT_SESSION_AUTH',
-  'AWS_ACCESS_KEY_ID',
-  'AWS_DEFAULT_REGION',
-  'AWS_PROFILE',
-  'AWS_REGION',
-  'AWS_SECRET_ACCESS_KEY',
-  'AWS_SESSION_TOKEN',
-  'AZURE_OPENAI_API_ENDPOINT',
-  'AZURE_OPENAI_API_KEY',
-  'AZURE_OPENAI_KEY',
-  'BAILIAN_CODING_PLAN_API_KEY',
-  'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS',
-  'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS',
-  'CLAUDE_CODE_SUBAGENT_MODEL',
-  'CLAUDE_CODE_USE_BEDROCK',
-  'CLAUDE_CODE_USE_VERTEX',
-  'CLAUDE_CONFIG_DIR',
-  'CODEBUFF_API_KEY',
-  'CODEX_HOME',
-  'COPILOT_CLI_TOKEN',
-  'CURSOR_API_KEY',
-  'DASHSCOPE_API_KEY',
-  'FACTORY_API_KEY',
-  'GEMINI_API_KEY',
-  'GEMINI_MODEL',
-  'GH_TOKEN',
-  'GITHUB_TOKEN',
-  'GOOGLE_API_KEY',
-  'GOOGLE_APPLICATION_CREDENTIALS',
-  'GOOGLE_CLOUD_LOCATION',
-  'GOOGLE_CLOUD_PROJECT',
-  'GOOGLE_GEMINI_BASE_URL',
-  'GOOGLE_GENAI_API_VERSION',
-  'GOOGLE_VERTEX_BASE_URL',
-  'GOOSE_CONTEXT_LIMIT',
-  'GOOSE_LEAD_MODEL',
-  'GOOSE_LEAD_PROVIDER',
-  'GOOSE_MODE',
-  'GOOSE_MODEL',
-  'GOOSE_PLANNER_MODEL',
-  'GOOSE_PLANNER_PROVIDER',
-  'GOOSE_PROVIDER',
-  'GOOSE_PROVIDER__API_KEY',
-  'GOOSE_PROVIDER__HOST',
-  'GOOSE_PROVIDER__TYPE',
-  'GROK_CODE_XAI_API_KEY',
-  'GROK_DEPLOYMENT_KEY',
-  'GROK_HOME',
-  'GROK_PROXY_URL',
-  'GROK_SANDBOX',
-  'HTTP_PROXY',
-  'HTTPS_PROXY',
-  'KIMI_API_KEY',
-  'MISTRAL_API_KEY',
-  'MOONSHOT_API_KEY',
-  'NO_PROXY',
-  'OPENAI_API_KEY',
-  'OPENAI_BASE_URL',
-  'OPENAI_MODEL',
-  'OPENAI_ORGANIZATION',
-  'OPENAI_PROJECT',
-  'OPENCODE_MODEL',
-  'OPENROUTER_API_KEY',
-  'OPENROUTER_BASE_URL',
-  'XAI_API_KEY',
-] as const;
 
 const DISPLAY_ENV_VARS = [
   'DISPLAY', // X11 display server
@@ -158,7 +79,7 @@ export interface AgentEnvOptions {
 
   /**
    * Emdash hook server connection details.  When set, injects
-   * EMDASH_HOOK_PORT, EMDASH_PTY_ID, and EMDASH_HOOK_TOKEN so agent CLIs
+   * EMDASH_HOOK_PORT, EMDASH_PTY_ID, and EMDASH_HOOK_NONCE so agent CLIs
    * can call back on lifecycle events.
    */
   hook?: {
@@ -286,6 +207,7 @@ export function buildAgentEnv(options: AgentEnvOptions = {}): Record<string, str
   if (hook && hook.port > 0) {
     env.EMDASH_HOOK_PORT = String(hook.port);
     env.EMDASH_PTY_ID = hook.ptyId;
+    env.EMDASH_HOOK_NONCE = hook.token;
     env.EMDASH_HOOK_TOKEN = hook.token;
   }
 

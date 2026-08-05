@@ -1,25 +1,53 @@
-import type { AgentProviderId } from '@shared/core/agents/agent-provider-registry';
+import { nextDefaultConversationTitle } from '@renderer/features/conversations/conversation-title-utils';
+import type { InitialConversationState } from '@renderer/features/tasks/task-config/initial-conversation-section';
+import { extractIssueMentionTargets } from '@shared/core/issues/issue-context';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import type { TaskConfig } from '@shared/core/tasks/task-config';
 import type { TaskLifecycleStatus } from '@shared/core/tasks/tasks';
-import { nextDefaultConversationTitle } from '../conversations/conversation-title-utils';
-import type { InitialConversationState } from '../conversations/initial-conversation-section';
 import { buildFinalPrompt } from './initial-conversation-text';
 import type { LinkedType } from './use-create-task-state';
 
+function buildInitialQueue(state: InitialConversationState) {
+  const text = state.prompt.trim();
+  if (!text) return undefined;
+
+  const hiddenContextParts: string[] = [];
+  if (state.issueContext?.trim()) {
+    hiddenContextParts.push(state.issueContext.trim());
+  }
+
+  const targets = extractIssueMentionTargets(state.prompt);
+  for (const target of targets) {
+    const context = state.issueMentionContexts[target.token];
+    if (context?.trim()) hiddenContextParts.push(context.trim());
+  }
+
+  const hiddenContext = hiddenContextParts.join('\n\n').trim();
+  return [
+    {
+      text: state.prompt,
+      ...(hiddenContext && { hiddenContext }),
+    },
+  ];
+}
+
 export function buildInitialConversation(
-  state: InitialConversationState,
-  getAutoApproveDefault: (provider: AgentProviderId) => boolean
+  state: InitialConversationState
 ): NonNullable<TaskConfig['initialConversation']> | undefined {
   const { provider } = state;
   if (!provider) return undefined;
+  const type = state.useChatUi ? 'acp' : 'pty';
 
   return {
     id: crypto.randomUUID(),
     provider,
     title: nextDefaultConversationTitle(provider, []),
-    initialPrompt: buildFinalPrompt(state.issueContext, state.prompt),
-    autoApprove: getAutoApproveDefault(provider),
+    ...(type === 'acp'
+      ? { initialQueue: buildInitialQueue(state) }
+      : { initialPrompt: buildFinalPrompt(state.issueContext, state.prompt) }),
+    autoApprove: state.autoApprove,
+    model: state.model ?? undefined,
+    type,
   };
 }
 

@@ -1,9 +1,9 @@
-import { definePlugin, registerPluginBehavior } from '@emdash/shared/agents/plugins';
+import { definePlugin, registerPluginBehavior } from '@emdash/core/agents/plugins';
 import {
   buildStandardCommand,
   createFileDropPlugin,
   npmDependency,
-} from '@emdash/shared/agents/plugins/helpers';
+} from '@emdash/core/agents/plugins/helpers';
 import { PI_EXTENSION_CONTENT } from './plugin-file';
 
 const PI_EXTENSION_PATH = '.pi/extensions/emdash-hook.ts';
@@ -18,28 +18,16 @@ export const plugin = definePlugin(
     websiteUrl: 'https://github.com/earendil-works/pi/tree/main/packages/coding-agent',
   },
   {
-    autoApprove: {
-      kind: 'none',
-    },
-    effort: {
-      kind: 'none',
-    },
     hooks: {
       kind: 'plugin',
       scope: 'workspace',
-      supportedEvents: ['stop'],
+      supportedEvents: ['session', 'stop'],
     },
     hostDependency: npmDependency({
       id: 'pi',
       package: '@earendil-works/pi-coding-agent',
       installFlags: '--ignore-scripts',
     }),
-    mcp: {
-      kind: 'none',
-    },
-    models: {
-      kind: 'none',
-    },
     plugins: {
       kind: 'file-drop',
       scope: 'workspace',
@@ -60,7 +48,9 @@ export const provider = registerPluginBehavior(plugin, {
     buildCommand: (ctx) =>
       buildStandardCommand(ctx, {
         initialPromptFlag: '',
-        resumeFlag: '-c',
+        resumeFlag: '--session',
+        sessionIdFlag: '--session',
+        sessionIdOnResumeOnly: true,
       }),
   },
   plugins: createFileDropPlugin({ relativePath: PI_EXTENSION_PATH, content: PI_EXTENSION_CONTENT }),

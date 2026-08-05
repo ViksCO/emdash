@@ -11,9 +11,9 @@ import {
   useTaskViewContext,
   useWorkspaceViewModel,
 } from '@renderer/features/tasks/task-view-context';
-import { panelDragStore } from '@renderer/lib/layout/panel-drag-store';
-import { ResizablePanel, ResizablePanelGroup } from '@renderer/lib/ui/resizable';
-import { DraggableResizeHandle, TaskMainColumn } from './view/task-main-column';
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@renderer/lib/ui/resizable';
+import { taskTabView } from './task-tab-registry';
+import { TaskMainColumn } from './view/task-main-column';
 import { TaskSidebar } from './view/task-sidebar';
 
 export const TaskMainPanel = observer(function TaskMainPanel() {
@@ -25,7 +25,7 @@ export const TaskMainPanel = observer(function TaskMainPanel() {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-3">
         <Loader2 className="h-5 w-5 animate-spin text-foreground-muted" />
-        <p className="font-mono text-xs text-foreground-muted">Creating task</p>
+        <p className="font-sans text-xs text-foreground-muted">Creating task</p>
       </div>
     );
   }
@@ -34,10 +34,10 @@ export const TaskMainPanel = observer(function TaskMainPanel() {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center p-8">
         <div className="flex max-w-xs flex-col items-center gap-2 text-center">
-          <p className="font-mono text-sm font-medium text-foreground-destructive">
+          <p className="font-sans text-sm font-medium text-foreground-destructive">
             Error creating task
           </p>
-          <p className="font-mono text-xs text-foreground-passive">{taskErrorMessage(taskStore)}</p>
+          <p className="font-sans text-xs text-foreground-passive">{taskErrorMessage(taskStore)}</p>
         </div>
       </div>
     );
@@ -48,7 +48,7 @@ export const TaskMainPanel = observer(function TaskMainPanel() {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-3">
         <Loader2 className="h-5 w-5 animate-spin text-foreground-muted" />
-        <p className="font-mono text-xs text-foreground-muted">{progressMessage}</p>
+        <p className="font-sans text-xs text-foreground-muted">{progressMessage}</p>
       </div>
     );
   }
@@ -57,10 +57,10 @@ export const TaskMainPanel = observer(function TaskMainPanel() {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center p-8">
         <div className="flex max-w-xs flex-col items-center gap-2 text-center">
-          <p className="font-mono text-sm font-medium text-foreground-destructive">
+          <p className="font-sans text-sm font-medium text-foreground-destructive">
             Failed to set up workspace
           </p>
-          <p className="font-mono text-xs text-foreground-muted">{taskErrorMessage(taskStore)}</p>
+          <p className="font-sans text-xs text-foreground-muted">{taskErrorMessage(taskStore)}</p>
         </div>
       </div>
     );
@@ -71,7 +71,7 @@ export const TaskMainPanel = observer(function TaskMainPanel() {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center gap-3">
         <Loader2 className="h-5 w-5 animate-spin text-foreground-muted" />
-        <p className="font-mono text-xs text-foreground-muted">{progressMessage}</p>
+        <p className="font-sans text-xs text-foreground-muted">{progressMessage}</p>
       </div>
     );
   }
@@ -80,10 +80,10 @@ export const TaskMainPanel = observer(function TaskMainPanel() {
     return (
       <div className="flex h-full w-full flex-col items-center justify-center p-8">
         <div className="flex max-w-xs flex-col items-center gap-2 text-center">
-          <p className="font-mono text-sm font-medium text-foreground-destructive">
+          <p className="font-sans text-sm font-medium text-foreground-destructive">
             Failed to tear down workspace
           </p>
-          <p className="font-mono text-xs text-foreground-muted">{taskErrorMessage(taskStore)}</p>
+          <p className="font-sans text-xs text-foreground-muted">{taskErrorMessage(taskStore)}</p>
         </div>
       </div>
     );
@@ -103,7 +103,6 @@ const ReadyTaskMainPanel = observer(function ReadyTaskMainPanel() {
   const sidebarPanelRef = usePanelRef();
 
   useEffect(() => {
-    panelDragStore.suppressFor(140);
     if (taskView.isSidebarCollapsed) {
       sidebarPanelRef.current?.collapse();
     } else {
@@ -112,25 +111,27 @@ const ReadyTaskMainPanel = observer(function ReadyTaskMainPanel() {
   }, [taskView.isSidebarCollapsed, sidebarPanelRef]);
 
   return (
-    <ResizablePanelGroup orientation="horizontal" id="task-sidebar-layout">
-      <ResizablePanel id="task-main-area">
-        <TaskMainColumn />
-      </ResizablePanel>
-      <DraggableResizeHandle />
-      <ResizablePanel
-        id="task-sidebar"
-        panelRef={sidebarPanelRef}
-        defaultSize="25%"
-        minSize="280px"
-        maxSize="50%"
-        collapsible
-        collapsedSize={SIDEBAR_COLLAPSED_SIZE}
-        onResize={() =>
-          taskView.setSidebarCollapsed(sidebarPanelRef.current?.isCollapsed() ?? false)
-        }
-      >
-        <TaskSidebar />
-      </ResizablePanel>
-    </ResizablePanelGroup>
+    <taskTabView.TabLayoutProvider layout={taskView.paneLayout}>
+      <ResizablePanelGroup orientation="horizontal" id="task-sidebar-layout">
+        <ResizablePanel id="task-main-area">
+          <TaskMainColumn />
+        </ResizablePanel>
+        <ResizableHandle />
+        <ResizablePanel
+          id="task-sidebar"
+          panelRef={sidebarPanelRef}
+          defaultSize="25%"
+          minSize="280px"
+          maxSize="50%"
+          collapsible
+          collapsedSize={SIDEBAR_COLLAPSED_SIZE}
+          onResize={() =>
+            taskView.setSidebarCollapsed(sidebarPanelRef.current?.isCollapsed() ?? false)
+          }
+        >
+          <TaskSidebar />
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    </taskTabView.TabLayoutProvider>
   );
 });

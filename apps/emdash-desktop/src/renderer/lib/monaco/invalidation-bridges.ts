@@ -1,29 +1,20 @@
+import type { FileChange } from '@emdash/core/files';
 import { events } from '@renderer/lib/ipc';
-import type { FileWatchEvent } from '@shared/core/fs/fs';
-import { fsWatchEventChannel } from '@shared/core/fs/fsEvents';
-import { HEAD_REF, STAGED_REF } from '@shared/core/git/git';
-import { gitRefChangedChannel, gitWorkspaceChangedChannel } from '@shared/core/git/gitEvents';
+import { fileChangesChannel } from '@shared/core/fs/fsEvents';
+import { gitRepoUpdateChannel, gitWorktreeUpdateChannel } from '@shared/core/git/events';
+import { HEAD_REF, STAGED_REF } from '@shared/core/git/types';
 import type { MonacoModelRegistry } from './monaco-model-registry';
 
 /** Disk models for paths affected by a watch event (atomic saves often use create/delete, not modify). */
-function diskUrisForFsWatchEvent(
+function diskUrisForFileChange(
   registry: MonacoModelRegistry,
   workspaceId: string,
-  e: FileWatchEvent
+  change: FileChange
 ): string[] {
-  if (e.path.startsWith('.git')) return [];
-  if (e.oldPath?.startsWith('.git')) return [];
+  if (change.path.split(/[\\/]/).includes('.git')) return [];
 
-  if (e.type === 'rename' && e.oldPath) {
-    return [
-      ...registry.findDiskUris({ workspaceId, filePath: e.path }),
-      ...registry.findDiskUris({ workspaceId, filePath: e.oldPath }),
-    ];
-  }
-
-  if (e.entryType !== 'file') return [];
-  if (e.type === 'modify' || e.type === 'create' || e.type === 'delete') {
-    return registry.findDiskUris({ workspaceId, filePath: e.path });
+  if (change.entryType !== 'directory') {
+    return registry.findDiskUris({ workspaceId, filePath: change.path });
   }
   return [];
 }
@@ -36,11 +27,16 @@ function diskUrisForFsWatchEvent(
  */
 export function wireModelRegistryInvalidation(registry: MonacoModelRegistry): () => void {
   // Disk file modifications → invalidate matching disk:// models.
-  const unsubFs = events.on(fsWatchEventChannel, ({ workspaceId, events: fsEvents }) => {
-    for (const e of fsEvents) {
-      const skippedGit = e.path.startsWith('.git') || e.oldPath?.startsWith('.git');
-      const uris = skippedGit ? [] : diskUrisForFsWatchEvent(registry, workspaceId, e);
-      if (skippedGit) continue;
+  const unsubFs = events.on(fileChangesChannel, ({ workspaceId, update }) => {
+    if (update.kind === 'resync') {
+      for (const uri of registry.findDiskUris({ workspaceId })) {
+        void registry.invalidateModel(uri);
+      }
+      return;
+    }
+
+    for (const change of update.changes) {
+      const uris = diskUrisForFileChange(registry, workspaceId, change);
       for (const uri of uris) {
         void registry.invalidateModel(uri);
       }
@@ -48,27 +44,18 @@ export function wireModelRegistryInvalidation(registry: MonacoModelRegistry): ()
   });
 
   // Workspace index/HEAD changes → invalidate staged or HEAD git:// models.
-  const unsubWorkspace = events.on(gitWorkspaceChangedChannel, ({ workspaceId, kind }) => {
-    const ref = kind === 'index' ? STAGED_REF : HEAD_REF;
+  const unsubWorkspace = events.on(gitWorktreeUpdateChannel, ({ workspaceId, update }) => {
+    const ref = update.kind === 'status' ? STAGED_REF : HEAD_REF;
     for (const uri of registry.findGitUris({ workspaceId, ref })) {
       void registry.invalidateModel(uri);
     }
   });
 
-  // Local/remote ref changes → invalidate matching git:// models (exact ref when known).
-  const unsubRefs = events.on(gitRefChangedChannel, ({ projectId, kind, changedRefs }) => {
-    if (kind === 'config') return;
-    if (changedRefs) {
-      for (const ref of changedRefs) {
-        for (const uri of registry.findGitUris({ projectId, ref })) {
-          void registry.invalidateModel(uri);
-        }
-      }
-    } else {
-      const refKind = 'branch'; // Both local and remote branches now share kind:'branch'
-      for (const uri of registry.findGitUris({ projectId, refKind })) {
-        void registry.invalidateModel(uri);
-      }
+  const unsubRefs = events.on(gitRepoUpdateChannel, ({ projectId, update }) => {
+    if (update.kind !== 'refs') return;
+    const refKind = 'branch';
+    for (const uri of registry.findGitUris({ projectId, refKind })) {
+      void registry.invalidateModel(uri);
     }
   });
 

@@ -1,3 +1,4 @@
+import type { Result } from '@emdash/shared';
 import { useQuery } from '@tanstack/react-query';
 import { observer } from 'mobx-react-lite';
 import { useState } from 'react';
@@ -5,13 +6,12 @@ import { useWorkspace } from '@renderer/features/tasks/task-view-context';
 import { rpc } from '@renderer/lib/ipc';
 import { formatBytes } from '@renderer/utils/formatBytes';
 import {
-  gitRefToString,
   HEAD_REF,
   type GitRef,
   type ImageReadResult,
   type ImageUnavailableReason,
-} from '@shared/core/git/git';
-import type { Result } from '@shared/lib/result';
+} from '@shared/core/git/types';
+import { gitRefToString } from '@shared/core/git/utils';
 import type { ActiveFile } from '@shared/view-state';
 
 interface ImageDiffViewProps {
@@ -75,7 +75,7 @@ function loadFromRef(
   ref: GitRef
 ): Promise<SideState> {
   return loadGitImage(() =>
-    rpc.workspace.git.getImageAtRef(projectId, workspaceId, filePath, gitRefToString(ref))
+    rpc.workspace.gitWorktree.getImageAtRef(projectId, workspaceId, filePath, gitRefToString(ref))
   );
 }
 
@@ -84,7 +84,7 @@ async function loadFromDisk(
   workspaceId: string,
   filePath: string
 ): Promise<SideState> {
-  const res = await rpc.workspace.fs.readImage(projectId, workspaceId, filePath);
+  const res = await rpc.workspace.files.readImage(projectId, workspaceId, filePath);
   if (!res.success) return { status: 'unavailable', reason: 'git-error' };
   const image = res.data;
   if (!image?.success) {
@@ -120,7 +120,7 @@ function loadModified(
       return loadFromDisk(projectId, workspaceId, activeFile.path);
     case 'staged':
       return loadGitImage(() =>
-        rpc.workspace.git.getImageAtIndex(projectId, workspaceId, activeFile.path)
+        rpc.workspace.gitWorktree.getImageAtIndex(projectId, workspaceId, activeFile.path)
       );
     case 'git':
     case 'pr':
@@ -164,11 +164,9 @@ function ImageSidePanel({ label, state, side }: { label: string; state: SideStat
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex shrink-0 items-baseline gap-2 border-b border-border px-3 py-2">
-        <span className="font-mono text-xs tracking-wide text-foreground-muted uppercase">
-          {label}
-        </span>
+        <span className="font-sans text-xs text-foreground-muted">{label}</span>
         {state.status === 'ready' && (
-          <span className="font-mono text-[10px] text-foreground-passive">
+          <span className="font-sans text-[10px] text-foreground-passive">
             {formatBytes(state.size)}
           </span>
         )}
@@ -231,15 +229,15 @@ export const ImageDiffView = observer(function ImageDiffView({
   activeFile,
 }: ImageDiffViewProps) {
   const workspace = useWorkspace();
-  const git = workspace.git;
+  const git = workspace.gitWorktree;
 
   const fileKey = `${activeFile.path}|${activeFile.group}|${gitRefToString(activeFile.originalRef)}|${activeFile.modifiedRef ? gitRefToString(activeFile.modifiedRef) : ''}`;
 
   // For disk/staged groups the bytes can change without fileKey changing
-  // (in-place overwrite, re-stage). Pinning to lastUpdatedAt reruns the
-  // load whenever GitStore observes an fs-watch or index event.
+  // (in-place overwrite, re-stage). Pinning to statusRevision reruns the
+  // load whenever GitWorktreeStore observes an fs-watch or index event.
   const reactiveRevision =
-    activeFile.group === 'disk' || activeFile.group === 'staged' ? git.fullStatus.lastUpdatedAt : 0;
+    activeFile.group === 'disk' || activeFile.group === 'staged' ? git.statusRevision : 0;
 
   const placeholder: SideState = { status: 'loading' };
 

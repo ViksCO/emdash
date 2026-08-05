@@ -54,6 +54,32 @@ export const AutoGenerateTaskNamesRow: React.FC = () => {
   );
 };
 
+export const AutoApproveByDefaultRow: React.FC = () => {
+  const taskSettings = useTaskSettings();
+
+  return (
+    <SettingRow
+      title="Auto-approve by default"
+      description="Skip permission prompts for supported agents when creating new tasks and conversations."
+      control={
+        <>
+          <ResetToDefaultButton
+            visible={taskSettings.isFieldOverridden('autoApproveByDefault')}
+            defaultLabel="off"
+            onReset={taskSettings.resetAutoApproveByDefault}
+            disabled={taskSettings.loading || taskSettings.saving}
+          />
+          <Switch
+            checked={taskSettings.autoApproveByDefault}
+            disabled={taskSettings.loading || taskSettings.saving}
+            onCheckedChange={taskSettings.updateAutoApproveByDefault}
+          />
+        </>
+      }
+    />
+  );
+};
+
 export const AutoTrustWorktreesRow: React.FC = () => {
   const taskSettings = useTaskSettings();
 
@@ -107,6 +133,32 @@ export const CreateBranchAndWorktreeRow: React.FC = () => {
             checked={taskSettings.createBranchAndWorktree}
             disabled={taskSettings.loading || taskSettings.saving}
             onCheckedChange={taskSettings.updateCreateBranchAndWorktree}
+          />
+        </>
+      }
+    />
+  );
+};
+
+export const DeleteBranchByDefaultRow: React.FC = () => {
+  const taskSettings = useTaskSettings();
+
+  return (
+    <SettingRow
+      title="Delete branch by default"
+      description="Preselect the delete branch option when deleting tasks with a deletable task branch."
+      control={
+        <>
+          <ResetToDefaultButton
+            visible={taskSettings.isFieldOverridden('deleteBranchByDefault')}
+            defaultLabel="off"
+            onReset={taskSettings.resetDeleteBranchByDefault}
+            disabled={taskSettings.loading || taskSettings.saving}
+          />
+          <Switch
+            checked={taskSettings.deleteBranchByDefault}
+            disabled={taskSettings.loading || taskSettings.saving}
+            onCheckedChange={taskSettings.updateDeleteBranchByDefault}
           />
         </>
       }

@@ -1,6 +1,6 @@
-import type { McpServerRegistration, PluginFs } from '@emdash/shared/agents/plugins';
+import type { McpServerRegistration, PluginFs } from '@emdash/core/agents/plugins';
+import type { McpServer } from '@emdash/core/mcp';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { McpServer } from '@shared/core/mcp/types';
 import type { McpService as McpServiceType } from './McpService';
 
 // ── In-memory PluginFs ───────────────────────────────────────────────────────
@@ -157,6 +157,30 @@ describe('McpService', () => {
 
       const result = await service.loadAll();
       expect(result.installed[0].args).toEqual(['foo']);
+    });
+
+    it('prefers runnable entries over metadata-only disabled stubs when merging', async () => {
+      mockProviders.push(fakeProvider('opencode', '.opencode.json'));
+      mockProviders.push(fakeProvider('cursor', '.cursor/mcp.json'));
+      await mockFs.write(
+        '.opencode.json',
+        JSON.stringify({
+          mcpServers: { shared: { enabled: false } },
+        })
+      );
+      await mockFs.write(
+        '.cursor/mcp.json',
+        JSON.stringify({
+          mcpServers: { shared: { command: 'npx' } },
+        })
+      );
+
+      const result = await service.loadAll();
+      expect(result.installed[0]).toMatchObject({
+        name: 'shared',
+        command: 'npx',
+        providers: ['opencode', 'cursor'],
+      });
     });
 
     it('skips agents that throw on read', async () => {

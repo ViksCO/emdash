@@ -1,4 +1,4 @@
-import type { IDisposable } from '@main/lib/lifecycle';
+import type { IDisposable } from '@emdash/shared';
 import { makePtySessionId } from '@shared/core/pty/ptySessionId';
 import { createLifecycleScriptTerminalId } from '@shared/core/terminals/terminals';
 import type { Pty, PtyExitInfo } from '../pty/pty';
@@ -41,6 +41,13 @@ function stripTerminalControls(value: string): string {
 function appendOutputTail(current: string, chunk: string): string {
   const next = current + stripTerminalControls(chunk);
   return next.length > OUTPUT_TAIL_CAP ? next.slice(-OUTPUT_TAIL_CAP) : next;
+}
+
+function terminalInputForScript(script: string, exit: boolean, windowsCmdExit: boolean): string {
+  const normalizedScript = script.replace(/\r?\n/g, '\r');
+  if (!exit) return `${normalizedScript}\r`;
+  const scriptBeforeExit = normalizedScript.replace(/\r+$/, '');
+  return windowsCmdExit ? `${scriptBeforeExit}\rexit\r` : `${scriptBeforeExit}; exit\r`;
 }
 
 export class LifecycleScriptService implements IDisposable {
@@ -105,13 +112,20 @@ export class LifecycleScriptService implements IDisposable {
     return { terminalId, sessionId };
   }
 
+  private async shouldUseWindowsCommandExit(terminalId: string): Promise<boolean> {
+    if (this.terminals.kind !== 'local' || process.platform !== 'win32') return false;
+    const shellFamily = await this.terminals.getLifecycleScriptShellFamily?.(terminalId);
+    return shellFamily === 'windows-cmd' || shellFamily === 'powershell';
+  }
+
   async prepareLifecycleScript(
     script: LifecycleScript,
     options: { initialSize?: { cols: number; rows: number } } = {}
-  ): Promise<void> {
+  ): Promise<Pty | null> {
     const { initialSize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS } } = options;
     const { terminalId, sessionId } = this.resolveIds(script);
-    if (ptySessionRegistry.get(sessionId)) return;
+    const existingPty = ptySessionRegistry.get(sessionId);
+    if (existingPty) return existingPty;
 
     await this.terminals.spawnLifecycleScript({
       terminal: {
@@ -127,6 +141,8 @@ export class LifecycleScriptService implements IDisposable {
       preserveBufferOnExit: true,
       watchDevServer: script.type === 'run',
     });
+
+    return ptySessionRegistry.get(sessionId) ?? null;
   }
 
   async runLifecycleScript(
@@ -145,13 +161,9 @@ export class LifecycleScriptService implements IDisposable {
       initialSize = { cols: DEFAULT_COLS, rows: DEFAULT_ROWS },
     } = options;
 
-    const { sessionId } = this.resolveIds(script);
+    const { terminalId, sessionId } = this.resolveIds(script);
 
-    if (!ptySessionRegistry.get(sessionId)) {
-      await this.prepareLifecycleScript(script, { initialSize });
-    }
-
-    const pty = ptySessionRegistry.get(sessionId);
+    const pty = await this.prepareLifecycleScript(script, { initialSize });
     if (!pty) {
       throw new Error(
         `Lifecycle script session unavailable for ${script.type} in workspace ${this.workspaceId}`
@@ -180,8 +192,13 @@ export class LifecycleScriptService implements IDisposable {
           })
         : null;
 
-      const command = exit ? `${script.script}; exit` : script.script;
-      pty.write(`${command}\n`);
+      pty.write(
+        terminalInputForScript(
+          script.script,
+          exit,
+          await this.shouldUseWindowsCommandExit(terminalId)
+        )
+      );
 
       if (!exitPromise) {
         return { kind: 'started' };

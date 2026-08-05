@@ -8,6 +8,7 @@ import {
 import { PrMergeLine } from '@renderer/lib/components/pr-merge-line';
 import { PrNumberBadge } from '@renderer/lib/components/pr-number-badge';
 import { StatusIcon } from '@renderer/lib/components/pr-status-icon';
+import { PrUrlCopyButton } from '@renderer/lib/components/pr-url-copy-button';
 import { toast } from '@renderer/lib/hooks/use-toast';
 import { rpc } from '@renderer/lib/ipc';
 import { type SplitButtonAction } from '@renderer/lib/ui/split-button';
@@ -15,10 +16,11 @@ import { ToggleGroup, ToggleGroupItem } from '@renderer/lib/ui/toggle-group';
 import { cn } from '@renderer/utils/utils';
 import { getPrNumber, type PullRequest } from '@shared/core/pull-requests/pull-requests';
 import { PrChecksList } from './checks-list';
-import { PrCommitsList } from './commits-list';
+import { CommitRangeCommitsList } from './commits-list';
 import { PrFilesList } from './files-list';
 import { MergeFooter } from './merge-footer';
 import { computeMergeUiState } from './merge-ui-state';
+import { commitRangeForPullRequest } from './use-commits';
 
 export type MergeMode = 'merge' | 'squash' | 'rebase';
 
@@ -105,18 +107,24 @@ export const PullRequestEntry = observer(function PullRequestEntry({ pr }: { pr:
   return (
     <div className={cn('flex min-h-0 flex-1 flex-col border-t border-border')}>
       <div className="flex w-full flex-col gap-2 p-2.5">
-        <div className="flex items-center justify-between gap-2">
+        <div className="group/header flex items-center justify-between gap-2">
           <button
-            className="group relative flex min-w-0 items-center gap-2"
+            className="group relative flex min-w-0 flex-1 items-center gap-2"
             onClick={() => rpc.app.openExternal(pr.url)}
           >
             <StatusIcon className="size-4" pr={pr} />
             <span className="min-w-0 flex-1 truncate text-sm font-normal">{pr.title}</span>
-            <PrNumberBadge number={getPrNumber(pr) ?? 0} />
-            <span className="absolute right-0 flex items-center bg-linear-to-r from-transparent to-background pr-0.5 pl-4 opacity-0 transition-opacity group-hover:opacity-100">
+            <div className="transition-opacity duration-200 group-hover:opacity-0">
+              <PrNumberBadge number={getPrNumber(pr) ?? 0} />
+            </div>
+            <span className="absolute right-0 flex items-center bg-linear-to-r from-transparent to-background pr-0.5 pl-4 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
               <ExternalLink className="size-3.5 text-foreground-muted" />
             </span>
           </button>
+          <PrUrlCopyButton
+            url={pr.url}
+            className="opacity-0 group-hover/header:opacity-100 focus-visible:opacity-100"
+          />
         </div>
         <PrMergeLine pr={pr} />
       </div>
@@ -143,7 +151,7 @@ export const PullRequestEntry = observer(function PullRequestEntry({ pr }: { pr:
         </ToggleGroup>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {tab === 'files' && <PrFilesList pr={pr} />}
-          {tab === 'commits' && <PrCommitsList />}
+          {tab === 'commits' && <CommitRangeCommitsList range={commitRangeForPullRequest(pr)} />}
           {tab === 'checks' && <PrChecksList projectId={projectId} pr={pr} />}
         </div>
       </div>

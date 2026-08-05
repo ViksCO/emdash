@@ -2,40 +2,32 @@ import { autorun } from 'mobx';
 import { observer } from 'mobx-react-lite';
 import type * as monacoNS from 'monaco-editor';
 import { createContext, useCallback, useContext, useEffect, useRef, type ReactNode } from 'react';
-import { useTabGroupContext } from '@renderer/features/tasks/tabs/tab-group-context';
+import { usePaneContext } from '@renderer/features/tabs/pane-context';
 import { useWorkspaceViewModel } from '@renderer/features/tasks/task-view-context';
 import { registerActiveCodeEditor } from '@renderer/lib/editor/activeCodeEditor';
 import { DEFAULT_EDITOR_OPTIONS } from '@renderer/lib/editor/utils';
 import { useTheme } from '@renderer/lib/hooks/useTheme';
 import { useShowModal } from '@renderer/lib/modal/modal-provider';
-import { codeEditorPool } from '@renderer/lib/monaco/monaco-code-pool';
+import { monacoBootstrap } from '@renderer/lib/monaco/monaco-bootstrap';
 import {
   addMonacoKeyboardShortcuts,
   configureMonacoEditor,
 } from '@renderer/lib/monaco/monaco-config';
 import { modelRegistry } from '@renderer/lib/monaco/monaco-model-registry';
-import { defineMonacoThemes, getMonacoTheme } from '@renderer/lib/monaco/monaco-themes';
 import { buildMonacoModelPath } from '@renderer/lib/monaco/monacoModelPath';
 import { useIsActiveTask } from '../hooks/use-is-active-task';
+import { useTaskViewContext } from '../task-view-context';
+import {
+  activeFileEntry as getActiveFileEntry,
+  activeFilePath as getActiveFilePath,
+} from './pane-selectors';
 
 interface EditorContextValue {
   /**
    * Ref callback that appends the pane's stable Monaco editor container to the
-   * given DOM element. Called by PaneContent to position the editor host.
+   * given DOM element. Called by MonacoFileRenderer to position the editor host.
    */
   setEditorHost: (el: HTMLElement | null) => void;
-  /**
-   * Explicitly re-runs layout() on the Monaco editor.
-   * Call this whenever the Monaco host transitions from hidden to visible
-   * (e.g. when activeRenderer switches to 'monaco').
-   */
-  triggerLayout: () => void;
-  /**
-   * Restore the editor's scroll + cursor for the active file without switching
-   * models — recovers scroll when toggling preview→source (same model, so attach()
-   * never fires). Saving is continuous (see onDidScrollChange in editor creation).
-   */
-  restoreActiveViewState: () => void;
 }
 
 const EditorContext = createContext<EditorContextValue | null>(null);
@@ -55,16 +47,13 @@ const scrollSaveEnabled = new WeakMap<object, boolean>();
 
 export const EditorProvider = observer(function EditorProvider({
   children,
-  taskId,
-  projectId: _projectId,
 }: {
   children: ReactNode;
-  taskId: string;
-  projectId: string;
 }) {
+  const { taskId } = useTaskViewContext();
   const taskView = useWorkspaceViewModel();
-  const { editorView, tabGroupManager } = taskView;
-  const { groupId, tabManager: paneTabManager } = useTabGroupContext();
+  const { editorView, paneLayout } = taskView;
+  const { paneId, pane: paneTabManager } = usePaneContext();
   const { effectiveTheme } = useTheme();
   const isActive = useIsActiveTask(taskId);
 
@@ -80,9 +69,6 @@ export const EditorProvider = observer(function EditorProvider({
   // Stable host element provided by PaneContent via setEditorHost.
   const hostRef = useRef<HTMLElement | null>(null);
 
-  // rAF id of the in-flight restore loop, so a new restore can cancel a stale one.
-  const restoreRafRef = useRef(0);
-
   // Tracks the previously-attached buffer URI so modelRegistry.attach can
   // save view state before switching models.
   const prevBufUriRef = useRef<string | undefined>(undefined);
@@ -92,18 +78,16 @@ export const EditorProvider = observer(function EditorProvider({
   // When this pane's editor is created it will inherit the current theme.
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    const m = codeEditorPool.getMonaco();
-    if (m) defineMonacoThemes(m as Parameters<typeof defineMonacoThemes>[0]);
-    codeEditorPool.setTheme(getMonacoTheme(effectiveTheme));
+    monacoBootstrap.setTheme(effectiveTheme);
   }, [effectiveTheme]);
 
   // ---------------------------------------------------------------------------
   // Editor creation — fires once on mount. Creates a Monaco editor directly
-  // (no pool lease) using the globally-loaded Monaco instance. Monaco is
-  // guaranteed to be loaded before any pane renders (bootstrap awaits pool init).
+  // using the globally-loaded Monaco instance. Monaco is guaranteed to be loaded
+  // before any pane renders (bootstrap awaits init in main.tsx).
   // ---------------------------------------------------------------------------
   useEffect(() => {
-    const m = codeEditorPool.getMonaco();
+    const m = monacoBootstrap.getMonaco();
     if (!m) return;
 
     const container = document.createElement('div');
@@ -121,7 +105,7 @@ export const EditorProvider = observer(function EditorProvider({
 
     addMonacoKeyboardShortcuts(editor, m, {
       onSave: () => {
-        const path = paneTabManager.activeFilePath;
+        const path = getActiveFilePath(paneTabManager);
         if (path) void editorView.saveFile(path);
       },
       onSaveAll: () => {
@@ -131,14 +115,14 @@ export const EditorProvider = observer(function EditorProvider({
 
     const focusDisposable = editor.onDidFocusEditorWidget(() => {
       taskView.setFocusedRegion('main');
-      tabGroupManager.setActiveGroup(groupId);
+      paneLayout.setActiveGroup(paneId);
     });
 
     // Continuously persist scroll + cursor for the active file while the editor is
     // laid out. Skipped while the host is hidden/detached (height 0) — there
     // automaticLayout has clamped scrollTop to 0, and saving then would lose the
-    // real position. Keeping each file's view state fresh lets both attach() (on
-    // tab switch) and the preview↔source toggle restore the correct offset.
+    // real position. Keeping each file's view state fresh lets attach() (on tab
+    // switch) and restart restore the correct offset.
     const scrollDisposable = editor.onDidScrollChange(() => {
       // Skip while hidden/detached (display:none or unmounted → DOM clientHeight 0;
       // note getLayoutInfo().height reports Monaco's 5px floor, not 0). Skip until
@@ -147,16 +131,10 @@ export const EditorProvider = observer(function EditorProvider({
       if (editor.getContainerDomNode().clientHeight <= 0 || !scrollSaveEnabled.get(editor)) {
         return;
       }
-      const path = paneTabManager.activeFilePath;
+      const path = getActiveFilePath(paneTabManager);
       if (!path) return;
       modelRegistry.saveViewState(buildMonacoModelPath(editorView.modelRootPath, path), editor);
     });
-
-    // Satisfy any focus request that arrived before the editor was ready.
-    if (focusPendingRef.current && editor.getModel()) {
-      focusPendingRef.current = false;
-      editor.focus();
-    }
 
     if (hostRef.current) {
       hostRef.current.appendChild(container);
@@ -167,7 +145,9 @@ export const EditorProvider = observer(function EditorProvider({
       focusDisposable.dispose();
       scrollDisposable.dispose();
       cleanupActive();
-      if (restoreRafRef.current) cancelAnimationFrame(restoreRafRef.current);
+      // Save the active file's view state before disposal. Must run here, not in
+      // the attachment autorun's cleanup — that fires after the editor is disposed.
+      modelRegistry.detach(editor, prevBufUriRef.current);
       editor.dispose();
       container.remove();
       editorRef.current = null;
@@ -185,7 +165,7 @@ export const EditorProvider = observer(function EditorProvider({
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
       if (!isActive || taskView.focusedRegion !== 'main') return;
-      if (tabGroupManager.activeGroupId !== groupId) return;
+      if (paneLayout.activePaneId !== paneId) return;
       if (event.key.toLowerCase() !== 's') return;
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
 
@@ -196,7 +176,7 @@ export const EditorProvider = observer(function EditorProvider({
         return;
       }
 
-      const path = paneTabManager.activeFilePath;
+      const path = getActiveFilePath(paneTabManager);
       if (!path) return;
 
       event.preventDefault();
@@ -206,7 +186,7 @@ export const EditorProvider = observer(function EditorProvider({
 
     window.addEventListener('keydown', handleKeyDown, { capture: true });
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
-  }, [editorView, groupId, isActive, paneTabManager, tabGroupManager, taskView]);
+  }, [editorView, paneId, isActive, paneTabManager, paneLayout, taskView]);
 
   // ---------------------------------------------------------------------------
   // Model attachment — autorun that re-evaluates whenever the pane-local active
@@ -218,30 +198,44 @@ export const EditorProvider = observer(function EditorProvider({
         const editor = editorRef.current;
         if (!editor) return;
 
-        const entry = paneTabManager.activeFileEntry; // reactive
+        const entry = getActiveFileEntry(paneTabManager); // reactive
         const newBufUri = entry ? buildMonacoModelPath(editorView.modelRootPath, entry.path) : null;
 
         if (!newBufUri) {
-          editor.setModel(null);
+          // detach saves the file's view state, so the scroll position survives
+          // switching to a non-file tab (conversation, diff, …).
+          modelRegistry.detach(editor, prevBufUriRef.current);
           prevBufUriRef.current = undefined;
           return;
         }
 
         const status = modelRegistry.modelStatus.get(newBufUri); // reactive
-        if (status !== 'ready') return;
+        if (status !== 'ready') {
+          if (prevBufUriRef.current && prevBufUriRef.current !== newBufUri) {
+            modelRegistry.detach(editor, prevBufUriRef.current);
+            prevBufUriRef.current = undefined;
+          }
+          return;
+        }
 
         if (newBufUri !== prevBufUriRef.current) {
           scrollSaveEnabled.set(editor, false); // suspend save until the new file is restored
         }
         modelRegistry.attach(editor, newBufUri, prevBufUriRef.current);
         prevBufUriRef.current = newBufUri;
+
         // attach restored the new file's view state iff the editor is on screen.
-        // Re-enable persistence here: the monacoVisible-gated restore only fires on a
-        // visibility transition, so a same-mode switch (e.g. source→source) would
-        // otherwise leave saving wedged off. The hidden/recreate case stays suspended
-        // and is re-enabled by restoreActiveViewState after its deferred restore.
+        // Re-enable continuous persistence once the editor has a real viewport, so a
+        // user scroll after a tab switch is saved. A recreate that starts at 0 height
+        // stays suspended until the next attach re-enables it.
         if (editor.getContainerDomNode().clientHeight > 0) {
           scrollSaveEnabled.set(editor, true);
+        }
+
+        // Satisfy any focus request that arrived while the model was still loading.
+        if (focusPendingRef.current) {
+          focusPendingRef.current = false;
+          editor.focus();
         }
       }),
     // oxlint-disable-next-line react/exhaustive-deps
@@ -265,7 +259,8 @@ export const EditorProvider = observer(function EditorProvider({
       autorun(() => {
         const uri = editorView.pendingConflictUri; // reactive
         if (!uri) return;
-        const filePath = uri.replace(`file://${editorView.modelRootPath}/`, '');
+        const filePath = modelRegistry.filePathForUri(uri);
+        if (!filePath) return;
         if (!editorView.openFilePaths.includes(filePath)) return;
         showConflictModal({
           filePath,
@@ -286,14 +281,14 @@ export const EditorProvider = observer(function EditorProvider({
   useEffect(() => {
     if (!isActive || focusedRegion !== 'main') return;
     // Only the focused pane should attempt to focus.
-    if (tabGroupManager.activeGroupId !== groupId) return;
+    if (paneLayout.activePaneId !== paneId) return;
     const editor = editorRef.current;
     if (editor?.getModel()) {
       editor.focus();
     } else {
       focusPendingRef.current = true;
     }
-  }, [isActive, focusedRegion, groupId, tabGroupManager.activeGroupId]);
+  }, [isActive, focusedRegion, paneId, paneLayout.activePaneId]);
 
   // ---------------------------------------------------------------------------
   // setEditorHost — called by PaneContent to give the editor a stable DOM node.
@@ -308,59 +303,5 @@ export const EditorProvider = observer(function EditorProvider({
     }
   }, []);
 
-  // ---------------------------------------------------------------------------
-  // triggerLayout — called when the Monaco host transitions from hidden to visible.
-  // ---------------------------------------------------------------------------
-  const triggerLayout = useCallback(() => {
-    editorRef.current?.layout();
-  }, []);
-
-  // ---------------------------------------------------------------------------
-  // View-state persistence for the in-tab preview↔source toggle (same model, so
-  // the attach() autorun above never fires). Keyed by the active file's URI.
-  // ---------------------------------------------------------------------------
-  const activeViewStateUri = useCallback(() => {
-    const entry = paneTabManager.activeFileEntry;
-    return entry ? buildMonacoModelPath(editorView.modelRootPath, entry.path) : null;
-  }, [paneTabManager, editorView]);
-
-  const restoreActiveViewState = useCallback(() => {
-    const uri = activeViewStateUri();
-    if (!uri) return;
-    // Cancel any in-flight restore loop so a stale file's offset can't land after a
-    // rapid switch (restoreViewState also guards on model identity as a backstop).
-    if (restoreRafRef.current) cancelAnimationFrame(restoreRafRef.current);
-    // Restore only once the editor has a real (non-zero) viewport. After a task
-    // switch the editor is recreated and a restore would otherwise run at 0/5px
-    // height, where automaticLayout immediately re-clamps the scroll to 0 (Monaco
-    // re-validates scroll against the viewport height on every layout). Retry on
-    // animation frames (bounded) until it has height, then restore once — i.e.
-    // setModel → real layout → restoreViewState, the order Monaco requires.
-    let frames = 0;
-    const tryRestore = () => {
-      const editor = editorRef.current;
-      // Keep retrying while the editor doesn't exist yet (on a recreate the host's
-      // layout effect runs before the provider creates the editor) or has no real
-      // viewport. Restore once both hold.
-      if (editor && editor.getContainerDomNode().clientHeight > 0) {
-        restoreRafRef.current = 0;
-        modelRegistry.restoreViewState(uri, editor);
-        // Editor now shows the restored offset; from here, user scrolls persist.
-        scrollSaveEnabled.set(editor, true);
-        return;
-      }
-      // TODO(ADE-5): if the editor stays 0-height past this budget (rare: a slow or
-      // collapsed/animating pane), the loop gives up without re-enabling saving, so
-      // persistence for this editor stays off until the next model change or
-      // visibility transition re-triggers a restore. Acceptable for now; revisit if hit.
-      if (frames++ < 60) restoreRafRef.current = requestAnimationFrame(tryRestore);
-    };
-    tryRestore();
-  }, [activeViewStateUri]);
-
-  return (
-    <EditorContext.Provider value={{ setEditorHost, triggerLayout, restoreActiveViewState }}>
-      {children}
-    </EditorContext.Provider>
-  );
+  return <EditorContext.Provider value={{ setEditorHost }}>{children}</EditorContext.Provider>;
 });

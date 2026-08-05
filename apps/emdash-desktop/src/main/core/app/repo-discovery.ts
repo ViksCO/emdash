@@ -1,7 +1,10 @@
+import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
-import { LocalFileSystem } from '@main/core/fs/impl/local-fs';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 export interface DiscoveredRepo {
   /** Directory name, shown in the palette. */
@@ -97,16 +100,16 @@ export async function discoverGitRepos(
 }
 
 /**
- * Enumerate the files of one repo as repo-relative paths — the in-memory list the
- * renderer fuzzy-filters per keystroke. Delegates to the shared `LocalFileSystem`
- * crawl so the peek reuses its bounds (entry cap + wall-clock budget), cancellation,
- * static ignore set, `.gitignore` handling (repo-root plus nested), and repo-root
- * symlink boundary rather than maintaining a parallel crawler.
+ * Enumerate the files of one repo as repo-relative, forward-slashed paths — the
+ * in-memory list the renderer fuzzy-filters per keystroke. Uses `git ls-files` so
+ * the listing honours `.gitignore` (repo-root plus nested) and the global excludes
+ * natively: tracked files plus untracked-but-not-ignored ones. Bounded by an entry
+ * cap (a huge checkout degrades to a truncated list) and a wall-clock timeout, and
+ * cancellable via `signal`.
  *
  * An unreadable or missing repo root is surfaced as a thrown error (not an empty
  * "success"), so the palette shows its "couldn't read files" state instead of what
- * looks like an empty repo. Per-subdirectory read failures during the crawl are
- * tolerated (skipped) as before.
+ * looks like an empty repo.
  */
 export async function listRepoFiles(
   repoPath: string,
@@ -115,19 +118,21 @@ export async function listRepoFiles(
   // Probe the root first: if we can't read it at all, propagate the failure.
   await fs.readdir(repoPath);
 
-  const provider = new LocalFileSystem(repoPath);
-  const result = await provider.list('', {
-    recursive: true,
-    maxEntries: options.maxEntries ?? DEFAULT_MAX_ENTRIES,
-    timeBudgetMs: options.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS,
-    filesOnly: true,
-    pathsOnly: true,
-    respectGitignore: true,
-    restrictSymlinksToRoot: true,
-    signal: options.signal,
-  });
+  const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
+  const timeBudgetMs = options.timeBudgetMs ?? DEFAULT_TIME_BUDGET_MS;
 
-  return { files: result.entries.map((entry) => entry.path), truncated: Boolean(result.truncated) };
+  // -c tracked, -o untracked, --exclude-standard drops ignored (honours nested
+  // .gitignore + global excludes), -z NUL-delimits so paths with odd characters
+  // survive. git emits repo-relative, forward-slashed paths on every platform.
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', repoPath, 'ls-files', '-co', '--exclude-standard', '-z'],
+    { signal: options.signal, timeout: timeBudgetMs, maxBuffer: 128 * 1024 * 1024 }
+  );
+
+  const all = stdout.length ? stdout.split('\0').filter(Boolean) : [];
+  const truncated = all.length > maxEntries;
+  return { files: truncated ? all.slice(0, maxEntries) : all, truncated };
 }
 
 // Session cache for discovery — repeated `@` opens are instant. Keyed by root so

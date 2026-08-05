@@ -1,5 +1,6 @@
-import { definePlugin, registerPluginBehavior } from '@emdash/shared/agents/plugins';
-import { buildStandardCommand } from '@emdash/shared/agents/plugins/helpers';
+import { definePlugin, registerPluginBehavior } from '@emdash/core/agents/plugins';
+import { buildStandardCommand } from '@emdash/core/agents/plugins/helpers';
+import { createNativeAcpBehavior } from '../../helpers/acp-stdio';
 import { icon } from './icon';
 
 export const plugin = definePlugin(
@@ -11,14 +12,11 @@ export const plugin = definePlugin(
     websiteUrl: 'https://hermes-agent.nousresearch.com/docs/',
   },
   {
-    autoApprove: {
+    acp: {
       kind: 'supported',
     },
-    effort: {
-      kind: 'none',
-    },
-    hooks: {
-      kind: 'none',
+    autoApprove: {
+      kind: 'supported',
     },
     hostDependency: {
       id: 'hermes',
@@ -47,15 +45,6 @@ export const plugin = definePlugin(
         },
       },
     },
-    mcp: {
-      kind: 'none',
-    },
-    models: {
-      kind: 'none',
-    },
-    plugins: {
-      kind: 'none',
-    },
     prompt: {
       kind: 'keystroke',
     },
@@ -67,6 +56,9 @@ export const plugin = definePlugin(
 );
 
 export const provider = registerPluginBehavior(plugin, {
+  acp: createNativeAcpBehavior(() => ({
+    args: ['acp'],
+  })),
   prompt: {
     buildCommand: (ctx) =>
       buildStandardCommand(ctx, {

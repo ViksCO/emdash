@@ -1,6 +1,7 @@
 import { Terminal } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useState } from 'react';
+import { useTabShortcuts } from '@renderer/features/tabs/hooks/useTabShortcuts';
 import {
   useTaskViewContext,
   useTerminals,
@@ -12,9 +13,7 @@ import {
   DEFAULT_TERMINAL_SHELL_AVAILABILITY,
   useTerminalShellAvailability,
 } from '@renderer/lib/hooks/use-terminal-shell-availability';
-import { useTabShortcuts } from '@renderer/lib/hooks/useTabShortcuts';
 import { rpc } from '@renderer/lib/ipc';
-import { panelDragStore } from '@renderer/lib/layout/panel-drag-store';
 import { Button } from '@renderer/lib/ui/button';
 import { EmptyState } from '@renderer/lib/ui/empty-state';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@renderer/lib/ui/resizable';
@@ -45,6 +44,14 @@ export const TerminalsPanel = observer(function TerminalsPanel() {
 
   const terminalTabs = terminalTabView.tabs;
   const lifecycleScriptTabs = lifecycleScriptsMgr?.tabs ?? [];
+  const terminalIdsOpenInMain = new Set<string>();
+  for (const group of taskView.paneLayout.groups) {
+    for (const entry of group.pane.entries.values()) {
+      if (entry.kind !== 'terminal') continue;
+      const terminalId = (entry.state as { terminalId?: unknown }).terminalId;
+      if (typeof terminalId === 'string') terminalIdsOpenInMain.add(terminalId);
+    }
+  }
 
   // Unified active item — spans both terminals and scripts sections.
   const activeItem = resolveTerminalPanelActiveItem({
@@ -55,14 +62,19 @@ export const TerminalsPanel = observer(function TerminalsPanel() {
   });
 
   const activeTerminalId = activeItem.kind === 'terminal' ? activeItem.id : undefined;
+  const activeTerminalIsOpenInMain =
+    activeTerminalId !== undefined && terminalIdsOpenInMain.has(activeTerminalId);
 
   const activeSession =
     activeItem.kind === 'terminal'
-      ? (terminalMgr.sessions.get(activeTerminalId ?? '') ?? null)
+      ? activeTerminalIsOpenInMain
+        ? null
+        : (terminalMgr.sessions.get(activeTerminalId ?? '') ?? null)
       : (lifecycleScriptTabs.find((s) => s.data.id === activeItem.id)?.session ?? null);
 
   const allSessionIds = [
     ...terminalTabs
+      .filter((t) => !terminalIdsOpenInMain.has(t.data.id))
       .map((t) => terminalMgr.sessions.get(t.data.id)?.sessionId)
       .filter((id): id is string => Boolean(id)),
     ...lifecycleScriptTabs.map((s) => s.session.sessionId),
@@ -110,18 +122,24 @@ export const TerminalsPanel = observer(function TerminalsPanel() {
   const emptyState = (
     <EmptyState
       icon={<Terminal className="text-muted-foreground h-5 w-5" />}
-      label="No terminals yet"
-      description="Add a terminal to run shell commands in this task's working directory."
+      label={activeTerminalIsOpenInMain ? 'Terminal open in main pane' : 'No terminals yet'}
+      description={
+        activeTerminalIsOpenInMain
+          ? 'Select the terminal tab in the main pane or create another terminal.'
+          : "Add a terminal to run shell commands in this task's working directory."
+      }
       action={
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => void handleCreate()}
-          className="flex items-center gap-2"
-        >
-          New terminal
-          <BoundShortcut settingsKey="newTerminal" />
-        </Button>
+        activeTerminalIsOpenInMain ? undefined : (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void handleCreate()}
+            className="flex items-center gap-2"
+          >
+            New terminal
+            <BoundShortcut settingsKey="newTerminal" variant="keycaps" />
+          </Button>
+        )
       }
     />
   );
@@ -146,22 +164,13 @@ export const TerminalsPanel = observer(function TerminalsPanel() {
           className="h-full"
           activeSession={activeSession}
           allSessionIds={allSessionIds}
-          paneId="terminal-drawer"
           autoFocus={autoFocus}
           emptyState={emptyState}
           remoteConnectionId={remoteConnectionId}
           workspaceId={workspaceId}
         />
       </ResizablePanel>
-      <ResizableHandle
-        onPointerDown={(e) => {
-          e.currentTarget.setPointerCapture(e.pointerId);
-          panelDragStore.setDragging(true);
-        }}
-        className="bg-transparent hover:bg-background-2"
-        onPointerUp={() => panelDragStore.setDragging(false)}
-        onPointerCancel={() => panelDragStore.setDragging(false)}
-      />
+      <ResizableHandle className="bg-transparent hover:bg-background-2" />
       <ResizablePanel id="terminal-drawer-sidebar" defaultSize="25%" minSize="150px" maxSize="50%">
         <TerminalDrawerSidebar
           className="h-full"

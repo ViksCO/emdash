@@ -1,11 +1,11 @@
 import { Command } from 'cmdk';
 import { useObserver } from 'mobx-react-lite';
+import type { ConversationStore } from '@renderer/features/conversations/conversation-manager';
+import { conversationRegistry } from '@renderer/features/conversations/stores/conversation-registry';
 import {
   asMounted,
   getProjectManagerStore,
 } from '@renderer/features/projects/stores/project-selectors';
-import type { ConversationStore } from '@renderer/features/tasks/conversations/conversation-manager';
-import { conversationRegistry } from '@renderer/features/tasks/stores/conversation-registry';
 import { getTaskView } from '@renderer/features/tasks/stores/task-selectors';
 import { isRegistered, type TaskStore } from '@renderer/features/tasks/stores/task-store';
 import type { NavigateFnTyped } from '@renderer/lib/layout/navigation-provider';
@@ -81,8 +81,10 @@ export function PaletteNotificationsGroup({
               conv={item.conv}
               value={`notif:conversation:${item.conv.data.id}`}
               onSelect={() => {
-                getTaskView(item.projectId, item.taskId)?.tabGroupManager.openConversation(
-                  item.conv.data.id
+                getTaskView(item.projectId, item.taskId)?.paneLayout.open(
+                  'conversation',
+                  { conversationId: item.conv.data.id },
+                  { preview: false }
                 );
                 if (item.projectId !== currentProjectId || item.taskId !== currentTaskId) {
                   navigate('task', { projectId: item.projectId, taskId: item.taskId });

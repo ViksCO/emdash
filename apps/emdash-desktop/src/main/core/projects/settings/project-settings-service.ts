@@ -1,6 +1,7 @@
+import { err, ok, type Result } from '@emdash/shared';
+import type { IInitializable } from '@emdash/shared';
 import { events } from '@main/lib/events';
 import { HookCore, type Hookable } from '@main/lib/hookable';
-import type { IInitializable } from '@main/lib/lifecycle';
 import { log } from '@main/lib/logger';
 import {
   type MigrateProjectConfigRequest,
@@ -12,7 +13,6 @@ import {
 } from '@shared/core/project-settings/project-settings';
 import { hasConfiguredShareableProjectSettings } from '@shared/core/project-settings/project-settings-fields';
 import { projectSettingsChangedChannel } from '@shared/core/projects/projectEvents';
-import { err, ok, type Result } from '@shared/lib/result';
 import type { UpdateProjectSettingsError } from '@shared/projects';
 import { projectManager } from '../project-manager';
 import type { ProjectProvider } from '../project-provider';
@@ -145,7 +145,7 @@ export class ProjectSettingsService implements Hookable<ProjectSettingsHooks>, I
     const overrideState = await computeProjectSettingsOverrideState(resolvedTargets);
     const configMigrations = hasConfiguredShareableProjectSettings(settings)
       ? []
-      : await inspectProjectConfigMigrations(project.fs);
+      : await inspectProjectConfigMigrations(project);
     return {
       settings,
       defaults,

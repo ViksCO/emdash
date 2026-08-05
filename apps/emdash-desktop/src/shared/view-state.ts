@@ -1,5 +1,5 @@
+import type { GitChangeStatus, GitObjectRef } from '@emdash/core/git';
 import type { BrowserSessionSnapshot } from '@shared/browser';
-import type { GitChangeStatus, GitObjectRef } from '@shared/core/git/git';
 
 export type TabViewSnapshot = {
   tabOrder: string[];
@@ -8,6 +8,7 @@ export type TabViewSnapshot = {
 
 export type TabDescriptor =
   | { kind: 'conversation'; tabId: string; conversationId: string; isPreview: boolean }
+  | { kind: 'acp-chat'; tabId: string; conversationId: string; isPreview: boolean }
   | { kind: 'file'; tabId: string; path: string; isPreview: boolean; isExternal?: boolean }
   | {
       kind: 'browser';
@@ -16,6 +17,7 @@ export type TabDescriptor =
       session: BrowserSessionSnapshot;
       isPreview: boolean;
     }
+  | { kind: 'terminal'; tabId: string; terminalId: string; isPreview: boolean }
   | {
       kind: 'diff';
       tabId: string;
@@ -111,9 +113,12 @@ export type TaskViewSnapshot = {
   diffView?: DiffViewSnapshot;
 };
 
+export type ProjectTaskSortBy = 'created-at' | 'updated-at' | 'pr-status' | 'unread';
+
 export type ProjectViewSnapshot = {
   activeView: string;
   taskViewTab: 'active' | 'archived';
+  taskSortBy?: ProjectTaskSortBy;
   selectedIssueProvider?: string;
 };
 

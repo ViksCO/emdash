@@ -1,5 +1,5 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,6 +8,14 @@ const mocks = vi.hoisted(() => ({
   getVersion: vi.fn(() => '1.1.27'),
   openExternal: vi.fn(),
   openPath: vi.fn(),
+  showItemInFolder: vi.fn(),
+  menuPopup: vi.fn(),
+  menuBuildFromTemplate: vi.fn((template: Electron.MenuItemConstructorOptions[]) => ({
+    popup: mocks.menuPopup,
+    template,
+  })),
+  eventEmit: vi.fn(),
+  clipboardWriteText: vi.fn(),
 }));
 
 vi.mock('node:child_process', () => ({
@@ -21,7 +29,7 @@ vi.mock('electron', () => ({
     quit: vi.fn(),
   },
   clipboard: {
-    writeText: vi.fn(),
+    writeText: mocks.clipboardWriteText,
   },
   dialog: {
     showOpenDialog: vi.fn(),
@@ -29,6 +37,10 @@ vi.mock('electron', () => ({
   shell: {
     openExternal: mocks.openExternal,
     openPath: mocks.openPath,
+    showItemInFolder: mocks.showItemInFolder,
+  },
+  Menu: {
+    buildFromTemplate: mocks.menuBuildFromTemplate,
   },
 }));
 
@@ -46,6 +58,7 @@ vi.mock('@main/db/schema', () => ({
 
 vi.mock('@main/lib/events', () => ({
   events: {
+    emit: mocks.eventEmit,
     on: vi.fn(() => vi.fn()),
   },
 }));
@@ -156,4 +169,63 @@ describe('AppService file jail', () => {
       );
     }
   );
+});
+
+describe('AppService.showItemInFolder', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('reveals the resolved path with Electron shell.showItemInFolder', async () => {
+    await appService.showItemInFolder(homedir());
+
+    expect(mocks.showItemInFolder).toHaveBeenCalledWith(await realpath(homedir()));
+  });
+
+  it('rejects paths outside the user home directory', async () => {
+    await expect(appService.showItemInFolder(tmpdir())).rejects.toThrow(
+      'Path must be inside the user home directory'
+    );
+    expect(mocks.showItemInFolder).not.toHaveBeenCalled();
+  });
+});
+
+describe('AppService.showTerminalContextMenu', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('copies the exact selected terminal text without trimming whitespace', () => {
+    appService.showTerminalContextMenu({
+      requestId: 'request-1',
+      selectionText: '  indented value\n',
+      x: 10,
+      y: 20,
+    });
+
+    const template = mocks.menuBuildFromTemplate.mock.calls[0]?.[0];
+    const copyItem = template?.find((item) => item.label === 'Copy');
+
+    expect(copyItem?.enabled).toBe(true);
+    copyItem?.click?.({} as Electron.MenuItem, undefined as never, undefined as never);
+
+    expect(mocks.clipboardWriteText).toHaveBeenCalledWith('  indented value\n');
+  });
+
+  it('allows copying whitespace-only selections', () => {
+    appService.showTerminalContextMenu({
+      requestId: 'request-1',
+      selectionText: '   ',
+      x: 10,
+      y: 20,
+    });
+
+    const template = mocks.menuBuildFromTemplate.mock.calls[0]?.[0];
+    const copyItem = template?.find((item) => item.label === 'Copy');
+
+    expect(copyItem?.enabled).toBe(true);
+    copyItem?.click?.({} as Electron.MenuItem, undefined as never, undefined as never);
+
+    expect(mocks.clipboardWriteText).toHaveBeenCalledWith('   ');
+  });
 });

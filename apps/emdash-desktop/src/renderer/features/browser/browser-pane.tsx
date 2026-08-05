@@ -1,13 +1,22 @@
 import { observer } from 'mobx-react-lite';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useDevServers } from '@renderer/features/tasks/task-view-context';
-import { rpc } from '@renderer/lib/ipc';
+import { usePaneContext } from '@renderer/features/tabs/pane-context';
+import { usePreviewServers } from '@renderer/features/tasks/task-view-context';
+import { events, rpc } from '@renderer/lib/ipc';
+import { Button } from '@renderer/lib/ui/button';
 import { normalizeBrowserUrl, normalizeBrowserZoomFactor } from '@shared/browser';
+import { tabNavigationShortcutChannel } from '@shared/events/appEvents';
 import { browserControlsRegistry } from './browser-controls-registry';
+import {
+  browserLoadErrorCode,
+  describeBrowserLoadError,
+  type BrowserLoadErrorPresentation,
+} from './browser-load-error';
 import { decideBrowserReload } from './browser-navigation-controls';
 import { browserSessionStore } from './browser-session-store';
 import { BrowserStartPage } from './browser-start-page';
 import { BrowserToolbar } from './browser-toolbar';
+import { canOpenBrowserUrlExternally, openBrowserUrlExternally } from './browser-toolbar-actions';
 import { bindBrowserWebviewEvents } from './browser-webview-events';
 import {
   createBrowserWebviewAdapter,
@@ -17,12 +26,18 @@ import {
 
 const WEBVIEW_ALLOW_POPUPS_ATTRIBUTE = 'true' as unknown as boolean;
 
-export const BrowserPane = observer(function BrowserPane({ browserId }: { browserId: string }) {
+export const BrowserPane = observer(function BrowserPane({
+  browserId,
+  visible,
+}: {
+  browserId: string;
+  visible: boolean;
+}) {
   const session = browserSessionStore.getSession(browserId);
-  const devServers = useDevServers();
+  const { pane } = usePaneContext();
+  const previewServers = usePreviewServers();
   const webviewRef = useRef<BrowserWebviewElement | null>(null);
   const focusUrlRef = useRef<() => void>(() => {});
-  const pendingUrlRef = useRef<string | null>(null);
   const [adapter, setAdapter] = useState<BrowserWebviewAdapter | null>(null);
   const [webviewElement, setWebviewElement] = useState<BrowserWebviewElement | null>(null);
   const [webviewMount, setWebviewMount] = useState<{
@@ -35,6 +50,16 @@ export const BrowserPane = observer(function BrowserPane({ browserId }: { browse
   const sessionBrowserId = session?.browserId;
   const sessionPartition = session?.partition;
   const showStartPage = session?.currentUrl === 'about:blank' && !session.isLoading;
+  const loadError = session && !session.isLoading ? session.loadError : undefined;
+  const loadErrorUrl = loadError ? (loadError.url ?? session?.currentUrl ?? '') : '';
+  const loadErrorPresentation = useMemo<BrowserLoadErrorPresentation | undefined>(
+    () => (loadError ? describeBrowserLoadError(loadError, loadErrorUrl) : undefined),
+    [loadError, loadErrorUrl]
+  );
+  const canOpenLoadErrorExternal = useMemo(
+    () => (loadError ? canOpenBrowserUrlExternally(loadErrorUrl) : false),
+    [loadError, loadErrorUrl]
+  );
 
   useEffect(() => {
     if (!sessionBrowserId || !sessionPartition || !session) {
@@ -79,9 +104,21 @@ export const BrowserPane = observer(function BrowserPane({ browserId }: { browse
   }, []);
 
   useEffect(() => {
-    if (!sessionBrowserId || adapter === null) return;
+    if (!visible || !sessionBrowserId || adapter === null) return;
     void rpc.browser.setActiveBrowser(sessionBrowserId);
-  }, [adapter, sessionBrowserId]);
+  }, [adapter, sessionBrowserId, visible]);
+
+  useEffect(() => {
+    if (!visible || !sessionBrowserId) return;
+    return events.on(tabNavigationShortcutChannel, (event) => {
+      if (event.source.kind !== 'browser' || event.source.browserId !== sessionBrowserId) return;
+      if (event.direction === 'next') {
+        pane.setNextTabActive();
+      } else {
+        pane.setPreviousTabActive();
+      }
+    });
+  }, [sessionBrowserId, pane, visible]);
 
   const webviewProps = useMemo(() => {
     if (!webviewMount) return null;
@@ -96,7 +133,6 @@ export const BrowserPane = observer(function BrowserPane({ browserId }: { browse
   const loadUrl = useCallback(
     (url: string) => {
       if (!sessionBrowserId) return;
-      pendingUrlRef.current = url;
       browserSessionStore.updateSession(sessionBrowserId, {
         currentUrl: url,
         faviconUrl: null,
@@ -104,7 +140,6 @@ export const BrowserPane = observer(function BrowserPane({ browserId }: { browse
         loadError: null,
       });
       if (adapter) {
-        pendingUrlRef.current = null;
         void adapter.loadUrl(url);
         return;
       }
@@ -200,13 +235,6 @@ export const BrowserPane = observer(function BrowserPane({ browserId }: { browse
   }, [sessionBrowserId, webviewElement]);
 
   useEffect(() => {
-    if (!adapter || !pendingUrlRef.current) return;
-    const pendingUrl = pendingUrlRef.current;
-    pendingUrlRef.current = null;
-    void adapter.loadUrl(pendingUrl);
-  }, [adapter]);
-
-  useEffect(() => {
     if (!sessionBrowserId) return;
     return browserControlsRegistry.register(sessionBrowserId, {
       adapter,
@@ -239,8 +267,17 @@ export const BrowserPane = observer(function BrowserPane({ browserId }: { browse
         }}
       />
       <div className="emlight min-h-0 flex-1 bg-background">
-        {showStartPage ? (
-          <BrowserStartPage devServerUrls={devServers.urls} onOpenUrl={navigateTo} />
+        {loadError && loadErrorPresentation ? (
+          <BrowserLoadErrorView
+            url={loadErrorUrl}
+            presentation={loadErrorPresentation}
+            code={browserLoadErrorCode(loadError)}
+            canOpenExternal={canOpenLoadErrorExternal}
+            onReload={reload}
+            onOpenExternal={() => openBrowserUrlExternally(loadErrorUrl)}
+          />
+        ) : showStartPage ? (
+          <BrowserStartPage devServerUrls={previewServers.urls} onOpenUrl={navigateTo} />
         ) : webviewProps && isRegistered ? (
           <webview
             key={`${webviewMount?.browserId ?? 'browser'}:${webviewMount?.partition ?? 'partition'}:${webviewMount?.revision ?? 0}`}
@@ -257,3 +294,45 @@ export const BrowserPane = observer(function BrowserPane({ browserId }: { browse
     </div>
   );
 });
+
+function BrowserLoadErrorView({
+  presentation,
+  code,
+  url,
+  canOpenExternal,
+  onReload,
+  onOpenExternal,
+}: {
+  presentation: BrowserLoadErrorPresentation;
+  code: string | null;
+  url: string;
+  canOpenExternal: boolean;
+  onReload: () => void;
+  onOpenExternal: () => void;
+}) {
+  return (
+    <div className="flex h-full min-h-0 items-center justify-center overflow-auto p-8">
+      <div className="flex max-w-sm flex-col items-center gap-2 text-center">
+        <h1 className="text-base font-medium text-foreground">{presentation.heading}</h1>
+        <p className="text-sm text-foreground-muted" title={url}>
+          {presentation.detail}
+          {code && <span className="text-foreground-tertiary-muted"> ({code})</span>}
+        </p>
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={onReload}>
+            Reload
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!canOpenExternal}
+            onClick={onOpenExternal}
+          >
+            Open externally
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,28 +1,39 @@
 import {
   DndContext,
+  type DragEndEvent,
   DragOverlay,
+  type DragStartEvent,
   PointerSensor,
   pointerWithin,
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
 import { observer } from 'mobx-react-lite';
-import { useEffect, useRef, useState, type ComponentProps } from 'react';
+import { useEffect, useState } from 'react';
 import { usePanelRef } from 'react-resizable-panels';
-import { panelDragStore } from '@renderer/lib/layout/panel-drag-store';
+import { PaneContent } from '@renderer/features/tabs/pane-content';
+import { PaneProvider } from '@renderer/features/tabs/pane-context';
+import type { Pane as PaneGroup } from '@renderer/features/tabs/pane-layout-store';
+import { TabDragPreview } from '@renderer/features/tabs/tab-bar/tab-drag-preview';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@renderer/lib/ui/resizable';
-import { TabGroupProvider } from '../tabs/tab-group-context';
-import { useTaskViewContext, useWorkspaceViewModel } from '../task-view-context';
+import { PaneEmptyState } from '../pane-empty-state';
+import { TabBarActions } from '../tab-bar-actions';
+import { useWorkspaceViewModel } from '../task-view-context';
+import { isTerminalDrawerDragData, type TerminalDrawerDragData } from '../terminals/terminal-drag';
 import { TerminalsPanel } from '../terminals/terminal-panel';
-import { PaneContent } from './pane-content';
-import { TabDragPreview } from './tab-bar/tab-drag-preview';
+
+type ActiveDrag =
+  | { kind: 'tab'; tabId: string }
+  | { kind: 'terminal'; terminal: TerminalDrawerDragData };
 
 export const TaskMainColumn = observer(function TaskMainColumn() {
   const taskView = useWorkspaceViewModel();
+  const { paneLayout } = taskView;
   const bottomPanelRef = usePanelRef();
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
 
   useEffect(() => {
-    panelDragStore.suppressFor(140);
     if (taskView.isTerminalDrawerOpen) {
       bottomPanelRef.current?.expand();
     } else {
@@ -30,104 +41,141 @@ export const TaskMainColumn = observer(function TaskMainColumn() {
     }
   }, [taskView.isTerminalDrawerOpen, bottomPanelRef]);
 
-  return (
-    <ResizablePanelGroup orientation="vertical" id="task-main-vertical">
-      <ResizablePanel id="task-main-content" minSize="30%">
-        <SplitPaneLayout />
-      </ResizablePanel>
-      <DraggableResizeHandle className={taskView.isTerminalDrawerOpen ? 'flex' : 'hidden'} />
-      <ResizablePanel
-        id="task-terminal-drawer"
-        panelRef={bottomPanelRef}
-        collapsible
-        collapsedSize="0%"
-        defaultSize="25%"
-        minSize="15%"
-        onResize={(_panelSize, _id, prevPanelSize) => {
-          if (prevPanelSize === undefined) return;
-          taskView.setTerminalDrawerOpen(!bottomPanelRef.current?.isCollapsed());
-        }}
-      >
-        <TerminalsPanel />
-      </ResizablePanel>
-    </ResizablePanelGroup>
-  );
-});
+  const handleDragStart = (event: DragStartEvent) => {
+    const terminalDragData = event.active.data.current;
+    if (isTerminalDrawerDragData(terminalDragData)) {
+      setActiveDrag({ kind: 'terminal', terminal: terminalDragData });
+      return;
+    }
+    setActiveDrag({ kind: 'tab', tabId: event.active.id as string });
+  };
 
-/** Renders one vertical pane per tab group inside a ResizablePanelGroup. */
-const SplitPaneLayout = observer(function SplitPaneLayout() {
-  const { projectId, taskId } = useTaskViewContext();
-  const taskView = useWorkspaceViewModel();
-  const { tabGroupManager } = taskView;
+  const handleDragEnd = (event: DragEndEvent) => {
+    setActiveDrag(null);
+    if (!event.over) return;
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
-  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+    const terminalDragData = event.active.data.current;
+    if (isTerminalDrawerDragData(terminalDragData)) {
+      const paneId = resolveDropPaneId(String(event.over.id), paneLayout);
+      if (!paneId) return;
+      paneLayout.setActiveGroup(paneId);
+      paneLayout.open(
+        'terminal',
+        { terminalId: terminalDragData.terminalId },
+        { target: { paneId } }
+      );
+      return;
+    }
+
+    paneLayout.handleDragEnd(event.active.id as string, event.over.id as string);
+  };
 
   return (
     <DndContext
       sensors={sensors}
       collisionDetection={pointerWithin}
-      onDragStart={({ active }) => setActiveDragId(active.id as string)}
-      onDragEnd={(event) => {
-        setActiveDragId(null);
-        if (event.over) {
-          tabGroupManager.handleDragEnd(event.active.id as string, event.over.id as string);
-        }
-      }}
-      onDragCancel={() => setActiveDragId(null)}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => setActiveDrag(null)}
     >
-      <ResizablePanelGroup orientation="horizontal" id="task-main-split">
-        {tabGroupManager.groups.map((group, i) => (
-          <TabGroupProvider key={group.groupId} group={group} taskId={taskId} projectId={projectId}>
-            {i > 0 && <ResizableHandle />}
-            <ResizablePanel
-              id={`pane-${group.groupId}`}
-              defaultSize={`${tabGroupManager.paneSizes[i] ?? Math.floor(100 / tabGroupManager.groups.length)}%`}
-              minSize="200px"
-              onPointerDown={() => tabGroupManager.setActiveGroup(group.groupId)}
-            >
-              <PaneContent />
-            </ResizablePanel>
-          </TabGroupProvider>
-        ))}
+      <ResizablePanelGroup orientation="vertical" id="task-main-vertical">
+        <ResizablePanel id="task-main-content" minSize="30%">
+          <SplitPaneLayout />
+        </ResizablePanel>
+        <ResizableHandle className={taskView.isTerminalDrawerOpen ? 'flex' : 'hidden'} />
+        <ResizablePanel
+          id="task-terminal-drawer"
+          panelRef={bottomPanelRef}
+          collapsible
+          collapsedSize="0%"
+          defaultSize="25%"
+          minSize="15%"
+          onResize={(_panelSize, _id, prevPanelSize) => {
+            if (prevPanelSize === undefined) return;
+            taskView.setTerminalDrawerOpen(!bottomPanelRef.current?.isCollapsed());
+          }}
+        >
+          <TerminalsPanel />
+        </ResizablePanel>
       </ResizablePanelGroup>
       <DragOverlay dropAnimation={null}>
-        {activeDragId ? <TabDragPreview tabId={activeDragId} /> : null}
+        {activeDrag?.kind === 'tab' ? (
+          <TabDragPreview tabId={activeDrag.tabId} />
+        ) : activeDrag?.kind === 'terminal' ? (
+          <TerminalDragPreview label={activeDrag.terminal.label} />
+        ) : null}
       </DragOverlay>
     </DndContext>
   );
 });
 
 /**
- * ResizableHandle wrapper that flips panelDragStore on/off during a drag so
- * embedded terminals can suppress fits while the user is dragging.
+ * One horizontal split pane: optional resize handle + resizable panel +
+ * PaneProvider + PaneContent (which self-hosts PaneDimensionProvider on its
+ * content region so the TabBar is excluded from the measured dimensions).
  */
-export function DraggableResizeHandle(props: ComponentProps<typeof ResizableHandle>) {
-  const draggingRef = useRef(false);
-  const stop = () => {
-    if (!draggingRef.current) return;
-    draggingRef.current = false;
-    panelDragStore.setDragging(false);
-  };
+const SplitPane = observer(function SplitPane({
+  group,
+  index,
+  isFocused,
+  onActivate,
+  defaultSizePct,
+}: {
+  group: PaneGroup;
+  index: number;
+  isFocused: boolean;
+  onActivate: () => void;
+  defaultSizePct: number;
+}) {
   return (
-    <ResizableHandle
-      {...props}
-      onPointerDown={(e) => {
-        props.onPointerDown?.(e);
-        e.currentTarget.setPointerCapture(e.pointerId);
-        if (!draggingRef.current) {
-          draggingRef.current = true;
-          panelDragStore.setDragging(true);
-        }
-      }}
-      onPointerUp={(e) => {
-        props.onPointerUp?.(e);
-        stop();
-      }}
-      onPointerCancel={(e) => {
-        props.onPointerCancel?.(e);
-        stop();
-      }}
-    />
+    <PaneProvider group={group} isFocusedPane={isFocused}>
+      {index > 0 && <ResizableHandle />}
+      <ResizablePanel
+        id={`pane-${group.paneId}`}
+        defaultSize={`${defaultSizePct}%`}
+        minSize="200px"
+        onPointerDown={onActivate}
+      >
+        <PaneContent emptyState={<PaneEmptyState />} actionsSlot={<TabBarActions />} />
+      </ResizablePanel>
+    </PaneProvider>
+  );
+});
+
+/** Renders one vertical pane per tab group inside a ResizablePanelGroup. */
+const SplitPaneLayout = observer(function SplitPaneLayout() {
+  const taskView = useWorkspaceViewModel();
+  const { paneLayout } = taskView;
+
+  return (
+    <ResizablePanelGroup orientation="horizontal" id="task-main-split">
+      {paneLayout.groups.map((group, i) => (
+        <SplitPane
+          key={group.paneId}
+          group={group}
+          index={i}
+          isFocused={taskView.focusedRegion === 'main' && paneLayout.activePaneId === group.paneId}
+          onActivate={() => paneLayout.setActiveGroup(group.paneId)}
+          defaultSizePct={paneLayout.paneSizes[i] ?? Math.floor(100 / paneLayout.groups.length)}
+        />
+      ))}
+    </ResizablePanelGroup>
+  );
+});
+
+function resolveDropPaneId(
+  overId: string,
+  paneLayout: ReturnType<typeof useWorkspaceViewModel>['paneLayout']
+): string | undefined {
+  if (overId.startsWith('pane-drop-')) return overId.slice('pane-drop-'.length);
+  if (overId.startsWith('pane-content-')) return overId.slice('pane-content-'.length);
+  return paneLayout.groups.find((group) => group.pane.entries.has(overId))?.paneId;
+}
+
+function TerminalDragPreview({ label }: { label: string }) {
+  return (
+    <div className="flex cursor-grabbing items-center gap-1.5 rounded-md border border-border bg-background-secondary-1 px-2 py-1 text-sm opacity-80 shadow-lg">
+      <span className="max-w-[200px] truncate">{label}</span>
+    </div>
   );
 }

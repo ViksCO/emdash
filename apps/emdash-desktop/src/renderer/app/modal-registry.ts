@@ -1,14 +1,15 @@
 import { CommandPaletteModal } from '@renderer/features/command-palette/command-palette-modal';
+import { CreateConversationModal } from '@renderer/features/conversations/create-conversation-modal';
 import { IntegrationSetupModal } from '@renderer/features/integrations/integration-setup-modal';
 import { PromptModal } from '@renderer/features/library/prompts/prompt-modal';
 import { McpModal } from '@renderer/features/mcp/components/McpModal';
 import { AddProjectModal } from '@renderer/features/projects/components/add-project-modal/add-project-modal';
 import { ProjectConfigImportModal } from '@renderer/features/projects/components/settings-view/project-config-import-modal';
 import { ShareProjectConfigModal } from '@renderer/features/projects/components/settings-view/share-project-config-modal';
+import { AgentSignInModal } from '@renderer/features/settings/agents-page/AgentSignInModal';
 import { GithubConnectModal } from '@renderer/features/settings/components/github-connect-modal';
 import { CreateSkillModal } from '@renderer/features/skills/components/CreateSkillModal';
 import { AddRemoteModal } from '@renderer/features/tasks/add-remote-modal';
-import { CreateConversationModal } from '@renderer/features/tasks/conversations/create-conversation-modal';
 import { CreateTaskModal } from '@renderer/features/tasks/create-task-modal/create-task-modal';
 import { DeleteTaskModal } from '@renderer/features/tasks/delete-task-modal';
 import { CreatePrModal } from '@renderer/features/tasks/diff-view/changes-panel/components/pr-entry/create-pr-modal';
@@ -37,6 +38,7 @@ export type ModalRegistryEntry<TProps = unknown, TResult = unknown> = {
    * scrim). The overlay scrim, focus trap, and initial-focus still apply.
    */
   bare?: boolean;
+  ignoreOutsidePressAfterWindowBlur?: boolean;
 };
 
 export function createModal<TProps, TResult>(
@@ -48,7 +50,7 @@ export function createModal<TProps, TResult>(
 
 export const modalRegistry = {
   commandPaletteModal: createModal(CommandPaletteModal, { bare: true }),
-  taskModal: createModal(CreateTaskModal),
+  taskModal: createModal(CreateTaskModal, { ignoreOutsidePressAfterWindowBlur: true }),
   addProjectModal: createModal(AddProjectModal),
   addSshConnModal: createModal(AddSshConnModal),
   changeProjectConnectionModal: createModal(ChangeProjectConnectionModal, { size: 'sm' }),
@@ -56,7 +58,9 @@ export const modalRegistry = {
   confirmActionModal: createModal(ConfirmActionDialog, { size: 'xs' }),
   confirmExternalLinkModal: createModal(ExternalLinkChoiceDialog, { size: 'sm' }),
   unsavedChangesModal: createModal(UnsavedChangesDialog, { size: 'xs' }),
-  createConversationModal: createModal(CreateConversationModal),
+  createConversationModal: createModal(CreateConversationModal, {
+    ignoreOutsidePressAfterWindowBlur: true,
+  }),
   feedbackModal: createModal(FeedbackModal),
   promptModal: createModal(PromptModal, { size: 'lg' }),
   mcpServerModal: createModal(McpModal),
@@ -68,6 +72,7 @@ export const modalRegistry = {
   projectConfigImportModal: createModal(ProjectConfigImportModal, { size: 'md' }),
   integrationSetupModal: createModal(IntegrationSetupModal, { size: 'md' }),
   githubConnectModal: createModal(GithubConnectModal, { size: 'md' }),
+  agentSignInModal: createModal(AgentSignInModal, { size: 'lg' }),
   addRemoteModal: createModal(AddRemoteModal),
   deleteTaskModal: createModal(DeleteTaskModal, { size: 'sm' }),
   // oxlint-disable-next-line typescript/no-explicit-any

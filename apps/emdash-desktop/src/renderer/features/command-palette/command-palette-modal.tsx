@@ -11,14 +11,15 @@ import {
 } from 'lucide-react';
 import { useObserver } from 'mobx-react-lite';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { conversationRegistry } from '@renderer/features/conversations/stores/conversation-registry';
 import { FilePreview } from '@renderer/features/file-peek/file-preview';
 import { useAppSettingsKey } from '@renderer/features/settings/use-app-settings-key';
-import { conversationRegistry } from '@renderer/features/tasks/stores/conversation-registry';
 import {
   getTaskStore,
   getTaskView,
   getWorkspaceForTask,
 } from '@renderer/features/tasks/stores/task-selectors';
+import { workspaceRegistry } from '@renderer/features/tasks/stores/workspace-registry';
 import { commandRegistry } from '@renderer/lib/commands/registry';
 import { OpenInMenu } from '@renderer/lib/components/titlebar/open-in-menu';
 import { FileIcon } from '@renderer/lib/editor/file-icon';
@@ -41,7 +42,7 @@ import { PaletteNotificationsGroup } from './palette-notifications-group';
 import { PaletteProjectsGroup } from './palette-projects-group';
 import { PaletteTaskItem } from './palette-task-item';
 import { ResourceMonitorView } from './resource-monitor-view';
-import { applyContextAffinity } from './search-utils';
+import { applyContextAffinity, getPaletteFileDisplayPath } from './search-utils';
 import { useRepoScope, type RepoScope } from './use-repo-scope';
 
 interface CommandPaletteProps {
@@ -107,16 +108,7 @@ function PaletteItem({
     <Command.Item value={value} onSelect={onSelect} className={cn(PALETTE_ITEM_CLASS, 'group')}>
       {iconNode}
       <span className="flex-1 truncate">{item.title}</span>
-      {action?.shortcut && (
-        <>
-          <Shortcut hotkey={action.shortcut} className="group-aria-selected:hidden" />
-          <Shortcut
-            hotkey={action.shortcut}
-            variant="badge"
-            className="hidden group-aria-selected:inline-flex"
-          />
-        </>
-      )}
+      {action?.shortcut && <Shortcut hotkey={action.shortcut} variant="keycaps" />}
     </Command.Item>
   );
 }
@@ -124,18 +116,26 @@ function PaletteItem({
 function PaletteFileItem({
   value,
   item,
+  workspacePath,
   onSelect,
 }: {
   value: string;
   item: SearchItem;
+  workspacePath?: string;
   onSelect: () => void;
 }) {
+  const displayPath = getPaletteFileDisplayPath({
+    workspacePath,
+    filePath: item.id,
+    fallback: item.subtitle,
+  });
+
   return (
     <Command.Item value={value} onSelect={onSelect} className={cn(PALETTE_ITEM_CLASS, 'group')}>
       <FileIcon filename={item.title} size={14} />
       <span className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
         <span className="shrink-0">{item.title}</span>
-        <span className="truncate text-xs text-foreground/40">{item.subtitle}</span>
+        <span className="truncate text-xs text-foreground/40">{displayPath}</span>
       </span>
       <span
         className="hidden shrink-0 items-center gap-2 text-tiny group-aria-selected:flex"
@@ -382,6 +382,8 @@ export function CommandPaletteModal({
 
   const rankedDb = applyContextAffinity(dbResults, { projectId });
   const actionResults = actions;
+  const workspacePath =
+    projectId && workspaceId ? workspaceRegistry.get(projectId, workspaceId)?.path : undefined;
 
   const q = debouncedQuery.toLowerCase();
   const matchedResourceMonitor =
@@ -431,14 +433,22 @@ export function CommandPaletteModal({
 
   const handleNavigateToConversation = (item: SearchItem) => {
     if (!item.projectId || !item.taskId) return;
-    getTaskView(item.projectId, item.taskId)?.tabGroupManager.openConversation(item.id);
+    getTaskView(item.projectId, item.taskId)?.paneLayout.open(
+      'conversation',
+      { conversationId: item.id },
+      { preview: false }
+    );
     handleClose();
     navigate('task', { projectId: item.projectId, taskId: item.taskId });
   };
 
   const handleOpenFile = (item: SearchItem) => {
     if (!item.projectId || !item.taskId) return;
-    getTaskView(item.projectId, item.taskId)?.tabManager.openFile(item.id);
+    getTaskView(item.projectId, item.taskId)?.activePane.open(
+      'file',
+      { path: item.id },
+      { preview: false }
+    );
     handleClose();
     navigate('task', { projectId: item.projectId, taskId: item.taskId });
   };
@@ -475,8 +485,8 @@ export function CommandPaletteModal({
         <ResourceMonitorView onBack={handleResourceMonitorBack} />
         <div className="flex items-center gap-4 border-t border-foreground/10 px-3 py-2">
           <span className="flex items-center gap-1 text-xs text-foreground/40">
-            <Shortcut hotkey="Escape" variant="badge" />
-            <Shortcut hotkey="Backspace" variant="badge" />
+            <Shortcut hotkey="Escape" variant="keycaps" />
+            <Shortcut hotkey="Backspace" variant="keycaps" />
             Back
           </span>
         </div>
@@ -645,6 +655,7 @@ export function CommandPaletteModal({
                       key={`file:${item.id}`}
                       value={`file:${item.id}`}
                       item={item}
+                      workspacePath={workspacePath}
                       onSelect={() => handleOpenFile(item)}
                     />
                   );

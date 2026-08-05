@@ -1,12 +1,13 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { asAgentProviderId } from '@emdash/plugins/agents/types';
 import { DEFAULT_BROWSER_PROFILE_ID, DEFAULT_BROWSER_PROFILES } from '@shared/browser';
 import type { AppSettings, AppSettingsKey } from '@shared/core/app-settings';
 import { TERMINAL_FONT_SIZE_DEFAULT } from '@shared/core/terminals/terminal-settings';
 import type { OpenInAppId } from '@shared/openInApps';
 import { getDefaultLocalWorktreeDirectory } from './worktree-defaults';
 
-export const DEFAULT_AGENT_ID = 'claude';
+export const DEFAULT_AGENT_ID = asAgentProviderId('claude');
 
 type SettingsDefaultsMap = {
   [K in AppSettingsKey]: AppSettings[K] | (() => AppSettings[K]);
@@ -26,12 +27,13 @@ export const SETTINGS_DEFAULTS = {
   }),
   tasks: {
     autoGenerateName: true,
+    autoApproveByDefault: false,
     autoTrustWorktrees: true,
     createBranchAndWorktree: true,
+    deleteBranchByDefault: false,
     preserveNameCapitalization: false,
     includeIssueContextByDefault: true,
   },
-  agentAutoApproveDefaults: {},
   notifications: {
     enabled: true,
     sound: true,
@@ -58,7 +60,6 @@ export const SETTINGS_DEFAULTS = {
     showLeftSidebarLineChanges: true,
     showLeftSidebarPrStatus: true,
     showLeftSidebarTimestamps: true,
-    confirmTabClose: false,
     hideContextBar: false,
   },
   browserPreview: {
@@ -66,6 +67,7 @@ export const SETTINGS_DEFAULTS = {
   },
   browser: {
     defaultProfileId: DEFAULT_BROWSER_PROFILE_ID,
+    relaxCorsForLocalhost: false,
     profiles: DEFAULT_BROWSER_PROFILES,
   },
   resourceMonitor: {

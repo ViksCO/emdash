@@ -1,16 +1,17 @@
 import { randomUUID } from 'node:crypto';
+import { isFileNotFoundCode } from '@emdash/core/files';
+import { err, ok, withLease } from '@emdash/shared';
 import { sql } from 'drizzle-orm';
-import { LocalExecutionContext } from '@main/core/execution-context/local-execution-context';
-import { LocalFileSystem } from '@main/core/fs/impl/local-fs';
-import { GitService } from '@main/core/git/impl/git-service';
 import { projectEvents } from '@main/core/projects/project-events';
 import { projectManager } from '@main/core/projects/project-manager';
+import { statAbsolute } from '@main/core/runtime/files-helpers';
+import { runtimeManager } from '@main/core/runtime/runtime-manager';
 import { db } from '@main/db/client';
 import { projects } from '@main/db/schema';
 import { log } from '@main/lib/logger';
-import type { LocalProject, ProjectPathStatus } from '@shared/projects';
-import { checkIsValidDirectory } from '../path-utils';
-import { ensureGitRepository, resolveProjectBaseRef } from './create-project-utils';
+import type { CreateProjectResult, ProjectPathStatus } from '@shared/projects';
+import { getDirectoryStatus } from '../path-utils';
+import { ensureProjectRepository } from './create-project-utils';
 import { ensureRepositoryWorkspace } from './ensure-repository-workspace';
 
 export type CreateLocalProjectParams = {
@@ -20,17 +21,30 @@ export type CreateLocalProjectParams = {
   initGitRepository?: boolean;
 };
 
-export async function createLocalProject(params: CreateLocalProjectParams): Promise<LocalProject> {
-  const isValidDirectory = checkIsValidDirectory(params.path);
-  if (!isValidDirectory) {
-    throw new Error('Invalid directory');
+export async function createLocalProject(
+  params: CreateLocalProjectParams
+): Promise<CreateProjectResult> {
+  const directoryStatus = getDirectoryStatus(params.path);
+  if (directoryStatus.kind === 'inspect-failed') {
+    return err({
+      type: 'inspect-failed',
+      path: params.path,
+      message: directoryStatus.message,
+    });
+  }
+  if (directoryStatus.kind !== 'directory') {
+    return err({
+      type: 'invalid-directory',
+      path: params.path,
+      message: 'Invalid directory',
+    });
   }
 
-  const fs = new LocalFileSystem(params.path);
-  const baseCtx = new LocalExecutionContext({ root: params.path });
-  const git = new GitService(baseCtx, fs);
-  const gitInfo = await ensureGitRepository(git, params.initGitRepository);
-  const baseRef = await resolveProjectBaseRef(git, gitInfo.baseRef);
+  const repositoryResult = await withLease(runtimeManager.acquire({ kind: 'local' }), (runtime) =>
+    ensureProjectRepository(runtime.git, params.path, params.initGitRepository)
+  );
+  if (!repositoryResult.success) return repositoryResult;
+  const gitInfo = repositoryResult.data;
 
   const [row] = await db
     .insert(projects)
@@ -39,7 +53,7 @@ export async function createLocalProject(params: CreateLocalProjectParams): Prom
       name: params.name,
       path: gitInfo.rootPath,
       workspaceProvider: 'local',
-      baseRef,
+      baseRef: gitInfo.baseRef,
       updatedAt: sql`CURRENT_TIMESTAMP`,
     })
     .returning();
@@ -49,7 +63,7 @@ export async function createLocalProject(params: CreateLocalProjectParams): Prom
     id: row.id,
     name: row.name,
     path: row.path,
-    baseRef: row.baseRef ?? baseRef,
+    baseRef: row.baseRef ?? gitInfo.baseRef,
     repositoryWorkspaceId: null as string | null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -68,18 +82,38 @@ export async function createLocalProject(params: CreateLocalProjectParams): Prom
 
   projectEvents._emit('project:created', project);
 
-  return project;
+  return ok(project);
 }
 
 export async function getLocalProjectPathStatus(path: string): Promise<ProjectPathStatus> {
-  const isDirectory = checkIsValidDirectory(path);
-  if (!isDirectory) {
-    return { isDirectory: false, isGitRepo: false };
-  }
+  const runtimeLease = await runtimeManager.acquire({ kind: 'local' });
+  try {
+    const pathEntry = await statAbsolute(runtimeLease.value.files, path);
+    if (!pathEntry.success) {
+      const code = 'code' in pathEntry.error ? pathEntry.error.code : undefined;
+      if (isFileNotFoundCode(code)) {
+        return { isDirectory: false, isGitRepo: false };
+      }
+      return {
+        isDirectory: false,
+        isGitRepo: false,
+        error: { type: 'inspect-failed', path, message: pathEntry.error.message },
+      };
+    }
+    if (pathEntry.data.type !== 'directory') {
+      return { isDirectory: false, isGitRepo: false };
+    }
 
-  const fs = new LocalFileSystem(path);
-  const baseCtx = new LocalExecutionContext({ root: path });
-  const git = new GitService(baseCtx, fs);
-  const gitInfo = await git.detectInfo();
-  return { isDirectory: true, isGitRepo: gitInfo.isGitRepo };
+    const inspection = await runtimeLease.value.git.inspectPath(path);
+    if (inspection.kind === 'inspect-failed') {
+      return {
+        isDirectory: true,
+        isGitRepo: false,
+        error: { type: 'inspect-failed', path: inspection.path, message: inspection.message },
+      };
+    }
+    return { isDirectory: true, isGitRepo: inspection.kind === 'repository' };
+  } finally {
+    await runtimeLease.release();
+  }
 }

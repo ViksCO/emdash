@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   getConversationsForProject: vi.fn(),
   getProjectManagerStore: vi.fn(),
   getPullRequestsForTask: vi.fn(),
-  getTaskGitStore: vi.fn(),
+  getTaskGitWorktreeStore: vi.fn(),
   getTasks: vi.fn(),
   mountProject: vi.fn(),
   provisionWorkspace: vi.fn(),
@@ -62,12 +62,13 @@ vi.mock('@renderer/features/projects/stores/project-selectors', () => ({
 }));
 
 vi.mock('@renderer/features/tasks/stores/task-selectors', () => ({
-  getTaskGitStore: mocks.getTaskGitStore,
+  getTaskGitWorktreeStore: mocks.getTaskGitWorktreeStore,
 }));
 
 vi.mock('@renderer/lib/stores/view-state-cache', () => ({
   viewStateCache: {
     get: mocks.viewStateGet,
+    set: vi.fn(),
   },
 }));
 
@@ -109,7 +110,7 @@ vi.mock('./workspace-registry', () => ({
   },
 }));
 
-vi.mock('./conversation-registry', () => ({
+vi.mock('@renderer/features/conversations/stores/conversation-registry', () => ({
   conversationRegistry: {
     acquire: mocks.conversationAcquire,
     get: vi.fn(),
@@ -147,8 +148,7 @@ function makeTaskManager(): TaskManagerStore {
   return new TaskManagerStore(
     'project-1',
     { pullRequestRepositoryUrl: null } as never,
-    { pageData: { invalidate: vi.fn() } } as never,
-    'main'
+    { pageData: { invalidate: vi.fn() } } as never
   );
 }
 
@@ -177,7 +177,7 @@ describe('TaskManagerStore archive lifecycle', () => {
     const manager = makeTaskManager();
     const task = makeTask();
     const store = createUnprovisionedTask(task);
-    store.transitionToProvisioned(task, '/tmp/workspace-1', 'workspace-1', {} as never, 'main');
+    store.transitionToProvisioned(task, '/tmp/workspace-1', 'workspace-1', {} as never);
     const viewModel = mocks.viewModels[0];
     const draftComments = mocks.draftComments[0];
     manager.tasks.set(task.id, store);

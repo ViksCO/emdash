@@ -123,16 +123,26 @@ describe('buildAgentEnv provider env forwarding', () => {
       CODEX_HOME: '/tmp/codex-home',
       OPENAI_ORGANIZATION: 'org_123',
       OPENAI_PROJECT: 'proj_123',
-      GEMINI_MODEL: 'gemini-2.5-pro',
       GOOGLE_GENAI_API_VERSION: 'v1beta',
       GROK_CODE_XAI_API_KEY: 'xai-key',
       GROK_HOME: '/tmp/grok-home',
+      GROK_POOL_IDLE_TIMEOUT_SECS: '120',
       BAILIAN_CODING_PLAN_API_KEY: 'bailian-key',
       GOOSE_PROVIDER: 'openai',
       GOOSE_MODEL: 'gpt-5.1',
       GOOSE_PROVIDER__HOST: 'https://goose.example.test',
       OPENCODE_MODEL: 'anthropic/claude-sonnet-4-5',
+      OMP_AUTH_BROKER_URL: 'https://broker.example.test',
+      PI_CODING_AGENT_DIR: '/tmp/omp-agent',
+      PI_CONFIG_DIR: '.omp-test',
+      PI_SMOL_MODEL: 'openai/gpt-5-mini',
       AMP_TOOLBOX: '/tmp/amp-toolbox',
+      QWEN_HOME: '/tmp/qwen-home',
+      QWEN_RUNTIME_DIR: '/tmp/qwen-runtime',
+      QWEN_DEFAULT_AUTH_TYPE: 'openai',
+      QWEN_MODEL: 'qwen3-coder-plus',
+      QWEN_SANDBOX: '1',
+      QWEN_CODE_SUPPRESS_YOLO_WARNING: '1',
       ALL_PROXY: 'socks5://127.0.0.1:9000',
     };
     Object.assign(process.env, providerEnv, {
@@ -140,6 +150,11 @@ describe('buildAgentEnv provider env forwarding', () => {
       CODEX_ACCESS_TOKEN: 'do-not-pass',
       GOOSE_TERMINAL: 'do-not-pass',
       TOOLBOX_ACTION: 'do-not-pass',
+      OPENCODE_CONFIG: '/tmp/do-not-pass-opencode-config.json',
+      OPENCODE_CONFIG_DIR: '/tmp/do-not-pass-opencode-config-dir',
+      // Only govern `opencode serve`/`opencode web`, which emdash never spawns.
+      OPENCODE_SERVER_PASSWORD: 'do-not-pass',
+      OPENCODE_SERVER_USERNAME: 'do-not-pass',
     });
 
     const { buildAgentEnv } = await loadPtyEnv();
@@ -152,6 +167,10 @@ describe('buildAgentEnv provider env forwarding', () => {
     expect(env.CODEX_ACCESS_TOKEN).toBeUndefined();
     expect(env.GOOSE_TERMINAL).toBeUndefined();
     expect(env.TOOLBOX_ACTION).toBeUndefined();
+    expect(env.OPENCODE_CONFIG).toBeUndefined();
+    expect(env.OPENCODE_CONFIG_DIR).toBeUndefined();
+    expect(env.OPENCODE_SERVER_PASSWORD).toBeUndefined();
+    expect(env.OPENCODE_SERVER_USERNAME).toBeUndefined();
   });
 
   it('adds provider vars while keeping hook variables authoritative', async () => {
@@ -164,6 +183,7 @@ describe('buildAgentEnv provider env forwarding', () => {
         EDITOR: 'vim',
         EMDASH_HOOK_PORT: '9999',
         EMDASH_PTY_ID: 'wrong',
+        EMDASH_HOOK_NONCE: 'wrong-nonce',
         EMDASH_HOOK_TOKEN: 'wrong-token',
       },
     });
@@ -172,6 +192,7 @@ describe('buildAgentEnv provider env forwarding', () => {
     expect(env.EDITOR).toBe('vim');
     expect(env.EMDASH_HOOK_PORT).toBe('1234');
     expect(env.EMDASH_PTY_ID).toBe('claude:conv-1');
+    expect(env.EMDASH_HOOK_NONCE).toBe('real-token');
     expect(env.EMDASH_HOOK_TOKEN).toBe('real-token');
   });
 });

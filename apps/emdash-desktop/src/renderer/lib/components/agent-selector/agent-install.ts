@@ -1,5 +1,5 @@
+import { match } from 'ts-pattern';
 import type { AgentInstallError, AgentUpdateError } from '@shared/core/agents/agent-payload';
-import { getProvider, type AgentProviderId } from '@shared/core/agents/agent-provider-registry';
 
 export type AgentInstallActionState = {
   render: boolean;
@@ -9,31 +9,26 @@ export type AgentInstallActionState = {
 };
 
 export function getAgentInstallErrorMessage(error: AgentInstallError): string {
-  switch (error.type) {
-    case 'permission-denied':
-      return error.message;
-    case 'command-failed':
-      return error.output ? `${error.message} ${error.output}` : error.message;
-    case 'pty-open-failed':
-      return error.message;
-    case 'unknown-dependency':
-      return `Unknown dependency: ${error.id}`;
-    case 'no-install-command':
-      return `No install command is available for ${error.id}.`;
-    case 'not-detected-after-install':
-      return 'The agent was not detected after installation.';
-  }
+  return match(error)
+    .with({ type: 'permission-denied' }, (e) => e.message)
+    .with({ type: 'command-failed' }, (e) => (e.output ? `${e.message} ${e.output}` : e.message))
+    .with({ type: 'pty-open-failed' }, (e) => e.message)
+    .with({ type: 'unknown-dependency' }, (e) => `Unknown dependency: ${e.id}`)
+    .with({ type: 'no-install-command' }, (e) => `No install command is available for ${e.id}.`)
+    .with(
+      { type: 'not-detected-after-install' },
+      () => 'The agent was not detected after installation.'
+    )
+    .exhaustive();
 }
 
 export function getAgentInstallActionState({
-  agentId,
   agentName,
   canInstall,
   isInstalled,
   isInstalling,
 }: {
-  agentId: AgentProviderId;
-  agentName?: string;
+  agentName: string;
   canInstall: boolean;
   isInstalled: boolean;
   isInstalling: boolean;
@@ -42,7 +37,7 @@ export function getAgentInstallActionState({
     render: canInstall && !isInstalled,
     disabled: isInstalling,
     installing: isInstalling,
-    label: `Install ${agentName ?? getProvider(agentId)?.name ?? agentId}`,
+    label: `Install ${agentName}`,
   };
 }
 
@@ -55,20 +50,14 @@ export type AgentUpdateActionState = {
 };
 
 export function getAgentUpdateErrorMessage(error: AgentUpdateError): string {
-  switch (error.type) {
-    case 'permission-denied':
-      return error.message;
-    case 'command-failed':
-      return error.output ? `${error.message} ${error.output}` : error.message;
-    case 'pty-open-failed':
-      return error.message;
-    case 'unknown-dependency':
-      return `Unknown dependency: ${error.id}`;
-    case 'no-update-strategy':
-      return `No update strategy is available for ${error.id}.`;
-    case 'not-detected-after-update':
-      return 'The agent was not detected after update.';
-  }
+  return match(error)
+    .with({ type: 'permission-denied' }, (e) => e.message)
+    .with({ type: 'command-failed' }, (e) => (e.output ? `${e.message} ${e.output}` : e.message))
+    .with({ type: 'pty-open-failed' }, (e) => e.message)
+    .with({ type: 'unknown-dependency' }, (e) => `Unknown dependency: ${e.id}`)
+    .with({ type: 'no-update-strategy' }, (e) => `No update strategy is available for ${e.id}.`)
+    .with({ type: 'not-detected-after-update' }, () => 'The agent was not detected after update.')
+    .exhaustive();
 }
 
 export function getAgentUpdateActionState({

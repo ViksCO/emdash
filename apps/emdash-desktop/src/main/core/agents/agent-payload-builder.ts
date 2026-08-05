@@ -1,25 +1,25 @@
-import type { CLIAgentPluginProvider } from '@emdash/shared/agents/plugins';
-import type { Platform } from '@emdash/shared/deps';
+import type { AgentAuthDescriptor, CLIAgentPluginProvider } from '@emdash/core/agents/plugins';
+import type { Platform } from '@emdash/core/deps';
 import {
   deriveHostDependencyStatus,
   resolveActiveInstallation,
   resolveInstallOptions,
   sourceKey,
   toPlatform,
-} from '@emdash/shared/deps/runtime';
+} from '@emdash/core/deps/runtime';
 import type {
   DependencyId,
   DependencyState,
   HostDependency,
   HostDependencyManager,
-} from '@emdash/shared/deps/runtime';
+} from '@emdash/core/deps/runtime';
+import type { AgentProviderId } from '@emdash/plugins/agents';
 import type {
   AgentInstallationStatus,
   AgentMetadata,
   AgentPayload,
   InstallOption,
 } from '@shared/core/agents/agent-payload';
-import { AGENT_PROVIDERS, type AgentProviderId } from '@shared/core/agents/agent-provider-registry';
 import { getDependencyDescriptor } from '../dependencies/registry';
 import { providerOverrideSettings } from '../settings/provider-settings-service';
 import { getPlugin, listPlugins } from './plugin-registry';
@@ -40,6 +40,8 @@ function buildMetadata(provider: CLIAgentPluginProvider): AgentMetadata {
     websiteUrl: metadata.websiteUrl,
     icon: assets.icon,
     capabilities: {
+      acp: capabilities.acp,
+      auth: buildAuthDescriptor(provider),
       hostDependency: capabilities.hostDependency,
       models: capabilities.models,
       effort: capabilities.effort,
@@ -51,6 +53,25 @@ function buildMetadata(provider: CLIAgentPluginProvider): AgentMetadata {
       plugins: capabilities.plugins,
     },
     installDocs: capabilities.hostDependency.installDocs ?? null,
+  };
+}
+
+function buildAuthDescriptor(provider: CLIAgentPluginProvider): AgentAuthDescriptor {
+  const auth = provider.capabilities.auth as AgentAuthDescriptor | undefined;
+  if (auth?.kind === 'supported') return auth;
+
+  const binaryName = provider.capabilities.hostDependency.binaryNames[0] ?? provider.metadata.id;
+  return {
+    kind: 'supported',
+    methods: [
+      {
+        kind: 'cli-login',
+        id: 'cli-login',
+        name: `Sign in with ${provider.metadata.name}`,
+        args: [],
+        description: `Open ${binaryName} in a terminal and complete the provider sign-in flow.`,
+      },
+    ],
   };
 }
 
@@ -66,8 +87,6 @@ async function buildOne(
   const state = dependencyManager?.get(id);
   const settingsMeta = await providerOverrideSettings.getItemWithMeta(id);
   const descriptor = getDependencyDescriptor(id);
-
-  const defaultConfig = settingsMeta?.defaults ?? {};
 
   const rawHostDep = dependencyManager?.getHostDependency(id);
   const hostDep =
@@ -87,11 +106,7 @@ async function buildOne(
     latestVersion,
     updateAvailable,
     command: usedInst?.pathEntry ?? state?.path ?? null,
-    settings: settingsMeta ?? {
-      value: defaultConfig,
-      defaults: defaultConfig,
-      overrides: {},
-    },
+    settings: settingsMeta,
     installOptions: descriptor ? resolveInstallOptions(descriptor, platform) : [],
     installations: hostDep?.installations ?? [],
     used,
@@ -114,7 +129,9 @@ export async function buildAgentPayloads(
   enrichHostDep?: EnrichHostDep
 ): Promise<AgentPayload[]> {
   const results = await Promise.all(
-    AGENT_PROVIDERS.map((p) => buildOne(p.id, platform, dependencyManager, enrichHostDep))
+    listPlugins().map((provider) =>
+      buildOne(provider.metadata.id as AgentProviderId, platform, dependencyManager, enrichHostDep)
+    )
   );
   return results.filter((r): r is AgentPayload => r !== null);
 }

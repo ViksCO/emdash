@@ -1,3 +1,4 @@
+import type { GitChange, GitChangeStatus } from '@emdash/core/git';
 import { SquareArrowRight, SquareDot, SquareMinus, SquarePlus, SquareX } from 'lucide-react';
 import { forwardRef, useState, useMemo, type ButtonHTMLAttributes, type MouseEvent } from 'react';
 import { splitPath } from '@renderer/features/tasks/utils';
@@ -6,18 +7,23 @@ import { Checkbox } from '@renderer/lib/ui/checkbox';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/lib/ui/tooltip';
 import { formatDiffLineCount } from '@renderer/utils/format-diff-line-count';
 import { cn } from '@renderer/utils/utils';
-import { type GitChange, type GitChangeStatus } from '@shared/core/git/git';
+import { displayPathForChange } from './changes-tree-utils';
 
 interface ChangesListItemProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   change: GitChange;
+  rootPath?: string;
   isSelected?: boolean;
   isActive?: boolean;
   onToggleSelect?: (path: string) => void;
 }
 
 export const ChangesListItem = forwardRef<HTMLButtonElement, ChangesListItemProps>(
-  ({ change, isSelected, isActive, onToggleSelect, className, ...props }, ref) => {
-    const { filename, directory } = useMemo(() => splitPath(change.path), [change.path]);
+  ({ change, rootPath, isSelected, isActive, onToggleSelect, className, ...props }, ref) => {
+    const displayPath = useMemo(
+      () => displayPathForChange(change.path, rootPath),
+      [change.path, rootPath]
+    );
+    const { filename, directory } = useMemo(() => splitPath(displayPath), [displayPath]);
     const [showTooltip, setShowTooltip] = useState(false);
 
     const handleMouseEnter = (e: MouseEvent<HTMLButtonElement>) => {

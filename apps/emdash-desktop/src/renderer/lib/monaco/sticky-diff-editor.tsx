@@ -2,7 +2,7 @@ import { autorun, observable, runInAction } from 'mobx';
 import type * as monaco from 'monaco-editor';
 import { useEffect, useRef } from 'react';
 import { useTheme } from '@renderer/lib/hooks/useTheme';
-import { diffEditorPool } from '@renderer/lib/monaco/monaco-diff-pool';
+import { monacoBootstrap } from '@renderer/lib/monaco/monaco-bootstrap';
 import { modelRegistry } from '@renderer/lib/monaco/monaco-model-registry';
 import { DIFF_EDITOR_BASE_OPTIONS } from './editorConfig';
 
@@ -18,14 +18,6 @@ export interface StickyDiffEditorProps {
   onEditorChange?: (editor: monaco.editor.IStandaloneDiffEditor | null) => void;
 }
 
-/**
- * Mounts a Monaco diff editor directly into a div (no pool lease/release).
- * The editor instance lives for the lifetime of this component; content is swapped
- * in-place via a MobX autorun when originalUri/modifiedUri change or models become ready.
- *
- * Requires Monaco to already be initialized (guaranteed by bootstrap awaiting
- * diffEditorPool.init before React renders).
- */
 export function StickyDiffEditor({
   originalUri,
   modifiedUri,
@@ -36,6 +28,11 @@ export function StickyDiffEditor({
   const mountRef = useRef<HTMLDivElement>(null);
   const modifiedUriRef = useRef(modifiedUri);
   modifiedUriRef.current = modifiedUri;
+
+  // URI pair of the models currently attached to the editor. The unmount save
+  // must key by this, not the URI props: the props can already point at a new
+  // diff whose models never attached.
+  const attachedUrisRef = useRef<{ original: string; modified: string } | null>(null);
 
   // Observable box so the autorun can react to the editor arriving after async mount.
   const editorBox = useRef(
@@ -51,10 +48,9 @@ export function StickyDiffEditor({
   const { effectiveTheme } = useTheme();
 
   // Create editor once on mount, dispose on unmount.
-  // Monaco is guaranteed ready because bootstrap awaited diffEditorPool.init().
+  // Monaco is guaranteed ready because monacoBootstrap.init() is awaited in main.tsx.
   useEffect(() => {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const m = (globalThis as any).__monaco as typeof monaco;
+    const m = monacoBootstrap.getMonaco();
     if (!m || !mountRef.current) return;
 
     const editor = m.editor.createDiffEditor(mountRef.current, {
@@ -84,6 +80,12 @@ export function StickyDiffEditor({
     return () => {
       onEditorChangeRef.current?.(null);
       heightDisposable.dispose();
+      // Save the viewport before disposal. The URI effect's cleanup can't cover
+      // unmount: it runs after this one, when editorBox is already null.
+      const attached = attachedUrisRef.current;
+      if (attached) {
+        modelRegistry.saveDiffViewState(attached.original, attached.modified, editor);
+      }
       runInAction(() => editorBox.set(null));
       editor.dispose();
     };
@@ -101,7 +103,7 @@ export function StickyDiffEditor({
 
   // Sync global Monaco theme (affects all editor instances simultaneously).
   useEffect(() => {
-    diffEditorPool.setTheme(effectiveTheme);
+    monacoBootstrap.setTheme(effectiveTheme);
   }, [effectiveTheme]);
 
   // Reactive content application — recreated when URIs change.
@@ -116,12 +118,13 @@ export function StickyDiffEditor({
       const prev = current.getModel();
       if (prev) {
         current.setModel(null);
+        attachedUrisRef.current = null;
         if (prev.original.uri.scheme === 'inmemory') prev.original.dispose();
         if (prev.modified.uri.scheme === 'inmemory') prev.modified.dispose();
       }
     }
 
-    return autorun(() => {
+    const disposer = autorun(() => {
       const editor = editorBox.get(); // reactive: waits for editor to exist
       if (!editor) return;
 
@@ -144,9 +147,19 @@ export function StickyDiffEditor({
       }
 
       editor.setModel({ original: origModel, modified: modModel });
+      attachedUrisRef.current = { original: originalUri, modified: modifiedUri };
       editor.layout();
+      // Restore scroll/cursor for the incoming URI pair.
+      modelRegistry.restoreDiffViewState(originalUri, modifiedUri, editor);
       onHeightChangeRef.current?.(editor.getModifiedEditor().getContentHeight());
     });
+
+    return () => {
+      // On unmount or URI change: save the current viewport so it can be restored later.
+      const ed = editorBox.get();
+      if (ed?.getModel()) modelRegistry.saveDiffViewState(originalUri, modifiedUri, ed);
+      disposer();
+    };
     // editorBox is a stable ref created once; only URI changes recreate the autorun.
     // oxlint-disable-next-line react/exhaustive-deps
   }, [originalUri, modifiedUri]);

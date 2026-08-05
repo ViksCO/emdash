@@ -37,14 +37,9 @@ export async function colorizeToHtml(
   effectiveTheme: string
 ): Promise<string> {
   // Loaded lazily so a peek only pulls Monaco when a code file is actually highlighted.
-  const [{ codeEditorPool }, { defineMonacoThemes, getMonacoTheme }] = await Promise.all([
-    import('@renderer/lib/monaco/monaco-code-pool'),
-    import('@renderer/lib/monaco/monaco-themes'),
-  ]);
-  await codeEditorPool.init();
-  const m = codeEditorPool.getMonaco();
+  const { monacoBootstrap } = await import('@renderer/lib/monaco/monaco-bootstrap');
+  const m = await monacoBootstrap.init();
   if (!m) throw new Error('Monaco is not available');
-  defineMonacoThemes(m as Parameters<typeof defineMonacoThemes>[0]);
-  m.editor.setTheme(getMonacoTheme(effectiveTheme));
+  monacoBootstrap.setTheme(effectiveTheme);
   return m.editor.colorize(content, monacoLanguageForPath(path, m), {});
 }

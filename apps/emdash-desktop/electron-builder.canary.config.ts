@@ -45,6 +45,10 @@ const config: Configuration = {
     hardenedRuntime: true,
     entitlements: 'build/entitlements.mac.plist',
     entitlementsInherit: 'build/entitlements.mac.plist',
+    extendInfo: {
+      NSMicrophoneUsageDescription:
+        'Emdash needs microphone access for voice dictation and voice mode features.',
+    },
     target: [
       { target: 'dmg', arch: ['arm64'] },
       { target: 'zip', arch: ['arm64'] },
@@ -64,6 +68,7 @@ const config: Configuration = {
   linux: {
     category: 'Development',
     executableName: APP_NAME_LOWER,
+    icon: 'src/assets/images/emdash/emdash-canary.png',
     target: [
       { target: 'AppImage', arch: ['x64'] },
       { target: 'deb', arch: ['x64'] },
@@ -77,7 +82,7 @@ const config: Configuration = {
     packageName: APP_NAME_LOWER,
   },
   win: {
-    icon: 'src/assets/images/emdash/app-icon-canary.png',
+    icon: 'src/assets/images/emdash/emdash-canary.png',
     target: [
       { target: 'nsis', arch: ['x64'] },
       { target: 'msi', arch: ['x64'] },

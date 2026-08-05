@@ -1,14 +1,14 @@
 import { observer } from 'mobx-react-lite';
 import { useRef } from 'react';
-import { AgentStatusIndicator } from '@renderer/features/tasks/components/agent-status-indicator';
 import { TaskContextMenu } from '@renderer/features/tasks/components/task-context-menu';
 import { TaskGitDiffStats } from '@renderer/features/tasks/components/task-git-diff-stats';
 import {
-  getTaskGitStore,
+  getTaskGitWorktreeStore,
   getTaskManagerStore,
   taskAgentStatus,
 } from '@renderer/features/tasks/stores/task-selectors';
 import { type TaskStore } from '@renderer/features/tasks/stores/task-store';
+import { AgentStatusIndicator } from '@renderer/lib/components/agent-status-indicator';
 import { PrBadge } from '@renderer/lib/components/pr-badge';
 import { StackedAgentLogos } from '@renderer/lib/components/stacked-agent-logos';
 import { useNavigate } from '@renderer/lib/layout/navigation-provider';
@@ -56,7 +56,8 @@ export const TaskRow = observer(function TaskRow({
   const canPin = task.state !== 'unregistered';
   const agentAttention = taskAgentStatus(task);
   const currentPr = task.data.prs ? selectCurrentPr(task.data.prs) : undefined;
-  const branchName = getTaskGitStore(task.data.projectId, task.data.id)?.branchName ?? undefined;
+  const branchName =
+    getTaskGitWorktreeStore(task.data.projectId, task.data.id)?.branchName ?? undefined;
 
   return (
     <TaskContextMenu
@@ -122,7 +123,7 @@ export const TaskRow = observer(function TaskRow({
           ) : (
             <RelativeTime
               value={task.data.createdAt}
-              className="pr-1 font-mono text-xs text-foreground-passive"
+              className="pr-1 font-sans text-xs text-foreground-passive"
               compact
             />
           )}

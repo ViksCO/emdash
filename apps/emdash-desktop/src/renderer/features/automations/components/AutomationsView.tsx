@@ -17,6 +17,7 @@ export function AutomationsView() {
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);
   const [initialTemplate, setInitialTemplate] = useState<BuiltinAutomationTemplate | undefined>();
+  const [pendingDelete, setPendingDelete] = useState<Automation | null>(null);
   const showConfirm = useShowModal('confirmActionModal');
   const { navigate } = useNavigate();
   const { params, setParams } = useParams('automations');
@@ -50,19 +51,34 @@ export function AutomationsView() {
   }
 
   function handleDelete(automation: Automation) {
+    setPendingDelete(automation);
+    closeSheet();
+  }
+
+  function handleSheetOpenChangeComplete(open: boolean) {
+    if (open || !pendingDelete) return;
+
+    // The sheet is modal and makes sibling portals inert. Wait until it has fully closed before
+    // opening the global confirmation dialog so that the dialog remains interactive.
+    const automation = pendingDelete;
+    setPendingDelete(null);
     showConfirm({
       title: 'Delete automation',
       description: `"${automation.name}" will be permanently deleted. Run history will be preserved.`,
       confirmLabel: 'Delete',
       onSuccess: () => {
-        void destroy.mutateAsync(automation.id).then(() => closeSheet());
+        void destroy
+          .mutateAsync(automation.id)
+          .catch(() => setParams({ automationId: automation.id }));
       },
+      onClose: () => setParams({ automationId: automation.id }),
     });
   }
 
   return (
-    <div className="mt-6 h-full overflow-hidden bg-background text-foreground">
-      <div className="mx-auto grid h-full min-h-0 w-full max-w-4xl grid-cols-1 gap-8">
+    <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
+      <div className="h-6 shrink-0 [-webkit-app-region:drag]" />
+      <div className="mx-auto grid min-h-0 w-full max-w-4xl flex-1 grid-cols-1 gap-8">
         <div className="relative min-h-0 w-full min-w-0 overflow-y-auto px-8">
           <div className="w-full py-8">
             <AutomationsHeader
@@ -93,8 +109,9 @@ export function AutomationsView() {
       <Sheet
         open={liveAutomation !== null || creating}
         onOpenChange={(open) => !open && closeSheet()}
+        onOpenChangeComplete={handleSheetOpenChangeComplete}
       >
-        <SheetContent showCloseButton={false}>
+        <SheetContent showCloseButton={false} className="[-webkit-app-region:no-drag]">
           {creating && (
             <CreateAutomationView
               onClose={closeSheet}

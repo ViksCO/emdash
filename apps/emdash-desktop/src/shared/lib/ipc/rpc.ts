@@ -3,6 +3,24 @@ import { type IpcMain } from 'electron';
 // oxlint-disable-next-line typescript/no-explicit-any
 type ProcedureMap = Record<string, (...args: any[]) => unknown>;
 
+const senderHandlerSymbol = Symbol.for('emdash.rpc.senderHandler');
+
+type SenderAwareHandler<TArgs extends unknown[], TReturn> = ((...args: TArgs) => TReturn) & {
+  [senderHandlerSymbol]: (senderId: number, ...args: TArgs) => TReturn;
+};
+
+export function withSender<TArgs extends unknown[], TReturn>(
+  handler: (senderId: number, ...args: TArgs) => TReturn
+): (...args: TArgs) => TReturn {
+  const publicHandler = (() => {
+    throw new Error('Sender-aware RPC handlers can only be invoked through IPC');
+  }) as unknown as SenderAwareHandler<TArgs, TReturn>;
+  Object.defineProperty(publicHandler, senderHandlerSymbol, {
+    value: handler,
+  });
+  return publicHandler;
+}
+
 export function createRPCController<T extends ProcedureMap>(handlers: T): T {
   return handlers;
 }
@@ -23,12 +41,16 @@ export function createRPCRouter<T extends RouterMap>(routers: T): T {
 }
 
 // Recursively walks the handler tree and registers every leaf function with
-// ipcMain at its full dot-joined path (e.g. "git.commit", "workspace.git.commit").
+// ipcMain at its full dot-joined path (e.g. "git.commit", "git.worktree.commit").
 function registerHandlers(ipcMain: IpcMain, prefix: string, value: unknown): void {
   if (typeof value === 'function') {
-    ipcMain.handle(prefix, (_event, ...args: unknown[]) =>
-      (value as (...a: unknown[]) => unknown)(...args)
-    );
+    ipcMain.handle(prefix, (event, ...args: unknown[]) => {
+      const senderHandler = (value as Partial<SenderAwareHandler<unknown[], unknown>>)[
+        senderHandlerSymbol
+      ];
+      if (senderHandler) return senderHandler(event.sender.id, ...args);
+      return (value as (...a: unknown[]) => unknown)(...args);
+    });
   } else if (value !== null && typeof value === 'object') {
     for (const [key, child] of Object.entries(value)) {
       registerHandlers(ipcMain, `${prefix}.${key}`, child);
@@ -43,8 +65,8 @@ export function registerRPCRouter(router: RouterMap, ipcMain: IpcMain): void {
 }
 
 // Recursively maps every leaf function to its async client equivalent.
-// Non-function values recurse, so both 2-level (rpc.repository.fetch) and
-// 3-level (rpc.workspace.git.commit) shapes are handled by a single type.
+// Non-function values recurse, so both 2-level (rpc.gitRepository.fetch) and
+// 3-level (rpc.workspace.gitWorktree.commit) shapes are handled by a single type.
 type IpcClient<R> = {
   [K in keyof R]: R[K] extends (...args: infer A) => infer Ret
     ? (...args: A) => Promise<Awaited<Ret>>

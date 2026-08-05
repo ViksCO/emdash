@@ -39,15 +39,19 @@ const config: Configuration = {
     hardenedRuntime: true,
     entitlements: 'build/entitlements.mac.plist',
     entitlementsInherit: 'build/entitlements.mac.plist',
+    extendInfo: {
+      NSMicrophoneUsageDescription:
+        'Emdash needs microphone access for voice dictation and voice mode features.',
+    },
     target: [
       { target: 'dmg', arch: ['arm64'] },
       { target: 'zip', arch: ['arm64'] },
     ],
-    icon: 'src/assets/images/emdash/emdash-beta.icns',
+    icon: 'src/assets/images/emdash/emdash.icns',
     notarize: false,
   },
   dmg: {
-    icon: 'src/assets/images/emdash/emdash-beta.icns',
+    icon: 'src/assets/images/emdash/emdash.icns',
     background: 'build/dmg-background.tiff',
     window: { width: 530, height: 319 },
     contents: [
@@ -57,6 +61,7 @@ const config: Configuration = {
   },
   linux: {
     category: 'Development',
+    icon: 'src/assets/images/emdash/emdash.png',
     target: [
       { target: 'AppImage', arch: ['x64'] },
       { target: 'deb', arch: ['x64'] },
@@ -64,7 +69,7 @@ const config: Configuration = {
     ],
   },
   win: {
-    icon: 'src/assets/images/emdash/app-icon-beta.png',
+    icon: 'src/assets/images/emdash/emdash.png',
     target: [
       { target: 'nsis', arch: ['x64'] },
       { target: 'msi', arch: ['x64'] },

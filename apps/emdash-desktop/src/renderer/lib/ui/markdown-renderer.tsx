@@ -24,6 +24,7 @@ interface MarkdownRendererProps {
   variant?: Variant;
   className?: string;
   allowHtml?: boolean;
+  onOpenLink?: (href: string) => boolean | void;
   /**
    * Optional callback for resolving non-external image src values (e.g. relative
    * paths inside a workspace). Should return a `data:` URI string, or `null` to
@@ -118,6 +119,23 @@ type WithChildrenAndClass = { children?: React.ReactNode; className?: string };
 type AnchorProps = { href?: string; children?: React.ReactNode };
 type ImgProps = React.ComponentPropsWithoutRef<'img'> & ExtraProps;
 
+function handleAnchorClick(
+  href: string | undefined,
+  onOpenLink: MarkdownRendererProps['onOpenLink'],
+  e: React.MouseEvent
+) {
+  if (!href) return;
+  if (onOpenLink?.(href)) {
+    e.preventDefault();
+    return;
+  }
+
+  if (/^https?:\/\//i.test(href)) {
+    e.preventDefault();
+    confirmOpenExternalLink(href);
+  }
+}
+
 function getCodeBlock(children: React.ReactNode, className?: string) {
   const language = /language-(\w+)/.exec(className || '')?.[1] ?? '';
   const isBlock = className?.includes('language-') ?? false;
@@ -143,7 +161,8 @@ function isOnlyMermaidDiagramChild(children: React.ReactNode): boolean {
 
 function useFullComponents(
   isDark: boolean,
-  resolveImage?: (src: string) => Promise<string | null>
+  resolveImage?: (src: string) => Promise<string | null>,
+  onOpenLink?: MarkdownRendererProps['onOpenLink']
 ) {
   return useMemo(
     () => ({
@@ -206,12 +225,8 @@ function useFullComponents(
           <pre className="mb-3 overflow-x-auto rounded-md border border-border">{children}</pre>
         ),
       a: ({ href, children }: AnchorProps) => {
-        const isHttp = typeof href === 'string' && /^https?:\/\//i.test(href);
         const handleClick = (e: React.MouseEvent) => {
-          if (isHttp) {
-            e.preventDefault();
-            confirmOpenExternalLink(href);
-          }
+          handleAnchorClick(href, onOpenLink, e);
         };
         return (
           <a
@@ -263,21 +278,27 @@ function useFullComponents(
       strong: ({ children }: WithChildren) => (
         <strong className="font-semibold text-foreground">{children}</strong>
       ),
-      input: ({ checked, ...props }: React.ComponentPropsWithoutRef<'input'>) => (
+      input: ({
+        checked,
+        disabled: _disabled,
+        ...props
+      }: React.ComponentPropsWithoutRef<'input'>) => (
         <input
           type="checkbox"
           checked={checked}
-          disabled
-          className="mr-2 align-middle"
+          readOnly
+          aria-disabled="true"
+          tabIndex={-1}
+          className="pointer-events-none mr-2 align-middle checked:accent-foreground-info"
           {...props}
         />
       ),
     }),
-    [isDark, resolveImage]
+    [isDark, resolveImage, onOpenLink]
   );
 }
 
-function useCompactComponents(isDark: boolean) {
+function useCompactComponents(isDark: boolean, onOpenLink?: MarkdownRendererProps['onOpenLink']) {
   return useMemo(
     () => ({
       h1: ({ children }: WithChildren) => (
@@ -353,12 +374,8 @@ function useCompactComponents(isDark: boolean) {
         <strong className="font-semibold text-foreground">{children}</strong>
       ),
       a: ({ href, children }: AnchorProps) => {
-        const isHttp = typeof href === 'string' && /^https?:\/\//i.test(href);
         const handleClick = (e: React.MouseEvent) => {
-          if (isHttp) {
-            e.preventDefault();
-            confirmOpenExternalLink(href);
-          }
+          handleAnchorClick(href, onOpenLink, e);
         };
         return (
           <a
@@ -382,7 +399,7 @@ function useCompactComponents(isDark: boolean) {
         />
       ),
     }),
-    [isDark]
+    [isDark, onOpenLink]
   );
 }
 
@@ -392,12 +409,13 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   className,
   allowHtml = variant === 'full',
   resolveImage,
+  onOpenLink,
 }) => {
   const { effectiveTheme } = useTheme();
   const isDark = isDarkTheme(effectiveTheme);
 
-  const fullComponents = useFullComponents(isDark, resolveImage);
-  const compactComponents = useCompactComponents(isDark);
+  const fullComponents = useFullComponents(isDark, resolveImage, onOpenLink);
+  const compactComponents = useCompactComponents(isDark, onOpenLink);
 
   const components = variant === 'full' ? fullComponents : compactComponents;
   const rehypePlugins = allowHtml ? FULL_REHYPE_PLUGINS : COMPACT_REHYPE_PLUGINS;

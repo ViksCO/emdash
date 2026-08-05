@@ -1,17 +1,153 @@
+import path from 'node:path';
+import { createBoundExec } from '@emdash/core/exec';
+import { FileSystem, isFileNotFoundError } from '@emdash/core/files';
+import { err, ok, type Result } from '@emdash/shared';
 import { and, eq, isNull, ne } from 'drizzle-orm';
+import { NON_INTERACTIVE_GIT_ENV } from '@main/core/execution-context/non-interactive-git-env';
 import { workspaceFileIndexService } from '@main/core/search/workspace-file-index-service';
+import { getGitExecutable } from '@main/core/utils/exec';
+import { resolveWorkspaceKind } from '@main/core/workspaces/resolve-workspace-kind';
 import { getProvisionedWorkspaceBranch } from '@main/core/workspaces/workspace-branch';
 import { db } from '@main/db/client';
 import { tasks, workspaces } from '@main/db/schema';
 import { log } from '@main/lib/logger';
 import type { WorkspaceConfig } from '@shared/core/workspaces/workspace-config';
+import type { WorkspaceKind, WorkspaceType } from '@shared/core/workspaces/workspaces';
 import type { ProjectProvider } from '../../projects/project-provider';
 
+const localFileSystem = new FileSystem();
+
+export type LocalWorkspaceCleanupTarget = {
+  id?: string;
+  kind?: WorkspaceKind | null;
+  type?: WorkspaceType | null;
+  location?: 'local' | 'remote' | null;
+  path?: string | null;
+};
+
+export async function pathExists(filePath: string): Promise<boolean> {
+  const exists = await localFileSystem.exists(filePath);
+  return exists.success && exists.data;
+}
+
+export function isLocalWorkspace(workspace: LocalWorkspaceCleanupTarget): boolean {
+  if (workspace.location === 'remote') return false;
+  if (workspace.type === 'project-ssh' || workspace.type === 'byoi') return false;
+  return true;
+}
+
+export async function hasWorktreeGitMarker(workspacePath: string | null | undefined) {
+  return workspacePath ? pathExists(path.join(workspacePath, '.git')) : false;
+}
+
+function isWorktreeWorkspace(workspace: LocalWorkspaceCleanupTarget): boolean {
+  if (!workspace.type) return workspace.kind === 'worktree';
+  return (
+    resolveWorkspaceKind({
+      kind: workspace.kind,
+      type: workspace.type,
+      path: workspace.path,
+    }) === 'worktree'
+  );
+}
+
+async function workspaceHasRemainingTasks(
+  workspaceId: string,
+  excludeArchived: boolean
+): Promise<boolean> {
+  const where = excludeArchived
+    ? and(eq(tasks.workspaceId, workspaceId), isNull(tasks.archivedAt))
+    : eq(tasks.workspaceId, workspaceId);
+
+  const siblings = await db.select({ id: tasks.id }).from(tasks).where(where).limit(1);
+  return siblings.length > 0;
+}
+
+async function pruneGitWorktrees(projectPath: string): Promise<void> {
+  try {
+    const gitExec = createBoundExec({
+      file: getGitExecutable(),
+      cwd: projectPath,
+      env: { ...process.env, ...NON_INTERACTIVE_GIT_ENV },
+    });
+    await gitExec.exec(['worktree', 'prune'], { timeoutMs: 5_000 });
+  } catch (error) {
+    log.warn('git worktree prune failed after task worktree cleanup', {
+      projectPath,
+      error: String(error),
+    });
+  }
+}
+
+export type OwnedWorktreeCleanupError =
+  | { type: 'project-root-refused'; path: string; message: string }
+  | { type: 'removal-failed'; path: string; message: string };
+
 /**
- * Removes the worktree when no remaining sibling tasks share the same workspace.
+ * Removes the recorded worktree directory of a local workspace. Fallback for
+ * task deletion when the project provider is unavailable or its git-based
+ * removal did not apply.
  *
- * `excludeArchived = true`  — only non-archived siblings block removal (use for archiveTask).
- * `excludeArchived = false` — any remaining sibling blocks removal (use for deleteTask).
+ * Returns `ok(true)` when the directory was removed, `ok(false)` when the
+ * workspace is not an owned local worktree (nothing to do).
+ */
+export async function removeOwnedLocalWorktreeDirectory(
+  workspace: LocalWorkspaceCleanupTarget,
+  projectPath: string
+): Promise<Result<boolean, OwnedWorktreeCleanupError>> {
+  if (!workspace.path || !isLocalWorkspace(workspace)) return ok(false);
+
+  const workspacePath = path.resolve(workspace.path);
+  const projectRootPath = path.resolve(projectPath);
+  if (workspacePath === projectRootPath) {
+    if (workspace.kind === 'worktree') {
+      return err({
+        type: 'project-root-refused',
+        path: workspace.path,
+        message: `Refusing to remove project root path "${workspace.path}"`,
+      });
+    }
+    return ok(false);
+  }
+
+  if (!isWorktreeWorkspace(workspace)) return ok(false);
+
+  const removal = await localFileSystem.remove(workspacePath, { recursive: true });
+  if (!removal.success && !isFileNotFoundError(removal.error)) {
+    return err({
+      type: 'removal-failed',
+      path: workspace.path,
+      message: removal.error.message,
+    });
+  }
+
+  if (await pathExists(workspacePath)) {
+    return err({
+      type: 'removal-failed',
+      path: workspace.path,
+      message: `Failed to remove worktree directory "${workspace.path}"`,
+    });
+  }
+
+  await pruneGitWorktrees(projectPath);
+  return ok(true);
+}
+
+export async function removeOwnedLocalWorktreeDirectoryIfUnused(
+  workspace: LocalWorkspaceCleanupTarget & { id: string },
+  projectPath: string,
+  excludeArchived: boolean
+): Promise<Result<boolean, OwnedWorktreeCleanupError>> {
+  if (await workspaceHasRemainingTasks(workspace.id, excludeArchived)) return ok(false);
+  return removeOwnedLocalWorktreeDirectory(workspace, projectPath);
+}
+
+/**
+ * Removes the worktree for destructive task deletion when no remaining sibling task shares the
+ * same workspace.
+ *
+ * `excludeArchived = false` means any remaining sibling blocks removal. Archive intentionally
+ * preserves workspace assets and does not call this helper.
  *
  * Returns `true` if the worktree was removed (no siblings found), `false` otherwise.
  */
@@ -28,12 +164,7 @@ export async function removeWorktreeIfUnused(
   const branchName = getProvisionedWorkspaceBranch(workspace);
   if (!branchName) return false;
 
-  const where = excludeArchived
-    ? and(eq(tasks.workspaceId, workspace.id), isNull(tasks.archivedAt))
-    : eq(tasks.workspaceId, workspace.id);
-
-  const siblings = await db.select({ id: tasks.id }).from(tasks).where(where).limit(1);
-  if (siblings.length > 0) return false;
+  if (await workspaceHasRemainingTasks(workspace.id, excludeArchived)) return false;
 
   try {
     await project.removeTaskWorktree(branchName);
@@ -48,7 +179,7 @@ export async function removeWorktreeIfUnused(
 }
 
 /**
- * Deletes the workspace row only when no other task still references it.
+ * Deletes the workspace row and its derived file index only when no other task still references it.
  *
  * Tasks are deduplicated onto a single workspace row per resolved path (see
  * `WorkspaceBootstrapService.persistPath`), so for `no-worktree` tasks every task in a
@@ -77,28 +208,13 @@ export async function deleteWorkspaceIfUnused(
     .limit(1);
   if (sibling) return;
 
-  await db
-    .delete(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .catch((e) => {
-      log.warn('deleteWorkspaceIfUnused: workspace row deletion failed', {
-        workspaceId,
-        error: String(e),
-      });
-    });
-}
-
-/**
- * Deletes the workspace file index when no non-archived sibling task shares the workspace.
- */
-export async function deleteIndexIfUnused(workspaceId: string): Promise<void> {
-  const siblings = await db
-    .select({ id: tasks.id })
-    .from(tasks)
-    .where(and(eq(tasks.workspaceId, workspaceId), isNull(tasks.archivedAt)))
-    .limit(1);
-
-  if (siblings.length === 0) {
+  try {
+    await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
     workspaceFileIndexService.deleteIndex(workspaceId);
+  } catch (e) {
+    log.warn('deleteWorkspaceIfUnused: workspace row deletion failed', {
+      workspaceId,
+      error: String(e),
+    });
   }
 }

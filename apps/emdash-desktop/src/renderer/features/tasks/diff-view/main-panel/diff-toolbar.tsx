@@ -1,7 +1,7 @@
 import { AlignJustify, Check, Columns2, Copy } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useCallback, useState } from 'react';
-import type { DiffTabStore } from '@renderer/features/tasks/tabs/diff-tab-store';
+import type { DiffTabResource } from '@renderer/features/tasks/diff-view/stores/diff-tab-resource';
 import { useWorkspaceViewModel } from '@renderer/features/tasks/task-view-context';
 import { splitPath } from '@renderer/features/tasks/utils';
 import { MicroLabel } from '@renderer/lib/ui/label';
@@ -9,7 +9,7 @@ import { ToggleGroup, ToggleGroupItem } from '@renderer/lib/ui/toggle-group';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/lib/ui/tooltip';
 
 interface DiffToolbarProps {
-  tab: DiffTabStore;
+  tab: DiffTabResource;
 }
 
 export const DiffToolbar = observer(function DiffToolbar({ tab }: DiffToolbarProps) {
@@ -23,6 +23,7 @@ export const DiffToolbar = observer(function DiffToolbar({ tab }: DiffToolbarPro
       setTimeout(() => setCopied(false), 1000);
     });
   }, [tab.path]);
+  const canPreview = tab.renderer.kind === 'text' && tab.renderer.previewKind !== undefined;
 
   const diffSourceLabel = (() => {
     if (tab.diffGroup === 'staged') return 'Staged';
@@ -65,23 +66,42 @@ export const DiffToolbar = observer(function DiffToolbar({ tab }: DiffToolbarPro
         {diffSourceLabel && <MicroLabel>{diffSourceLabel}</MicroLabel>}
       </div>
       <div className="flex items-center gap-2">
-        <ToggleGroup
-          size="sm"
-          multiple={false}
-          value={[diffStyle]}
-          onValueChange={([value]) => {
-            if (value) {
-              diffView.setDiffStyle(value as 'unified' | 'split');
-            }
-          }}
-        >
-          <ToggleGroupItem value="unified">
-            <AlignJustify className="h-3.5 w-3.5" />
-          </ToggleGroupItem>
-          <ToggleGroupItem value="split">
-            <Columns2 className="h-3.5 w-3.5" />
-          </ToggleGroupItem>
-        </ToggleGroup>
+        {canPreview && (
+          <ToggleGroup
+            size="sm"
+            multiple={false}
+            value={[tab.viewMode]}
+            onValueChange={([value]) => {
+              if (value === 'diff' || value === 'preview') tab.setViewMode(value);
+            }}
+          >
+            <ToggleGroupItem value="diff" className="text-xs">
+              Diff
+            </ToggleGroupItem>
+            <ToggleGroupItem value="preview" className="text-xs">
+              Preview
+            </ToggleGroupItem>
+          </ToggleGroup>
+        )}
+        {tab.viewMode === 'diff' && (
+          <ToggleGroup
+            size="sm"
+            multiple={false}
+            value={[diffStyle]}
+            onValueChange={([value]) => {
+              if (value) {
+                diffView.setDiffStyle(value as 'unified' | 'split');
+              }
+            }}
+          >
+            <ToggleGroupItem value="unified">
+              <AlignJustify className="h-3.5 w-3.5" />
+            </ToggleGroupItem>
+            <ToggleGroupItem value="split">
+              <Columns2 className="h-3.5 w-3.5" />
+            </ToggleGroupItem>
+          </ToggleGroup>
+        )}
       </div>
     </div>
   );

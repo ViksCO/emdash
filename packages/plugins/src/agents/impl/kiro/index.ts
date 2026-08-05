@@ -1,5 +1,6 @@
-import { definePlugin, registerPluginBehavior } from '@emdash/shared/agents/plugins';
-import { buildStandardCommand } from '@emdash/shared/agents/plugins/helpers';
+import { definePlugin, registerPluginBehavior } from '@emdash/core/agents/plugins';
+import { buildStandardCommand } from '@emdash/core/agents/plugins/helpers';
+import { createNativeAcpBehavior } from '../../helpers/acp-stdio';
 import { buildKiroHookConfig } from './hooks';
 import { icon } from './icon';
 
@@ -12,11 +13,11 @@ export const plugin = definePlugin(
     websiteUrl: 'https://kiro.dev/docs/cli/',
   },
   {
-    autoApprove: {
+    acp: {
       kind: 'supported',
     },
-    effort: {
-      kind: 'none',
+    autoApprove: {
+      kind: 'supported',
     },
     hooks: {
       kind: 'config',
@@ -50,15 +51,6 @@ export const plugin = definePlugin(
         },
       },
     },
-    mcp: {
-      kind: 'none',
-    },
-    models: {
-      kind: 'none',
-    },
-    plugins: {
-      kind: 'none',
-    },
     prompt: {
       kind: 'argv',
       flag: '',
@@ -71,6 +63,9 @@ export const plugin = definePlugin(
 );
 
 export const provider = registerPluginBehavior(plugin, {
+  acp: createNativeAcpBehavior(() => ({
+    args: ['acp'],
+  })),
   prompt: {
     buildCommand: (ctx) =>
       buildStandardCommand(ctx, {

@@ -1,7 +1,7 @@
+import type { GitBranchRef } from '@emdash/core/git';
 import { useMemo, useState } from 'react';
-import { getRepositoryStore } from '@renderer/features/projects/stores/project-selectors';
+import { getGitRepositoryStore } from '@renderer/features/projects/stores/project-selectors';
 import { useProjectWorkspaces } from '@renderer/features/tasks/task-config/existing-workspace-picker';
-import type { Branch } from '@shared/core/git/git';
 import type { LinkedIssue } from '@shared/core/linked-issue';
 import type { PullRequest } from '@shared/core/pull-requests/pull-requests';
 import { buildWorkspaceConfigFromPreset } from '@shared/core/workspaces/build-workspace-config-from-preset';
@@ -11,7 +11,11 @@ import type { WorkspaceConfig } from '@shared/core/workspaces/workspace-config';
 import type { WorkspacePresetId } from '@shared/core/workspaces/workspace-presets';
 import { compileSetupSpec } from '@shared/core/workspaces/workspace-setup-spec';
 import { useBranchName, type BranchNameState } from './use-branch-name';
-import { useBranchSelection, type BranchSelectionState } from './use-branch-selection';
+import {
+  useBranchSelection,
+  type BranchSelectionInitial,
+  type BranchSelectionState,
+} from './use-branch-selection';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -111,11 +115,12 @@ export type WorkspaceConfigInitial = {
   mode?: WorkspaceMode;
   presetId?: WorkspacePresetId;
   selectedWorkspaceId?: string | null;
+  branchSelection?: BranchSelectionInitial;
 };
 
 export function useWorkspaceConfig(opts: {
   projectId: string | undefined;
-  defaultBranch: Branch | undefined;
+  defaultBranch: GitBranchRef | undefined;
   isUnborn: boolean;
   currentBranch: string | null;
   repositoryWorkspaceId: string | null | undefined;
@@ -189,9 +194,9 @@ export function useWorkspaceConfig(opts: {
   const branchSelection = useBranchSelection(
     projectId,
     defaultBranch,
-    isUnborn,
     currentBranch,
-    undefined,
+    isUnborn,
+    initial?.branchSelection,
     createBranchAndWorktreeDefault
   );
 
@@ -249,7 +254,7 @@ export function useWorkspaceConfig(opts: {
   // ── Setup steps ───────────────────────────────────────────────────────────
 
   const setupSteps = useMemo((): string[] => {
-    const repo = projectId ? getRepositoryStore(projectId) : undefined;
+    const repo = projectId ? getGitRepositoryStore(projectId) : undefined;
     const baseRemote = repo?.baseRemote?.name ?? 'origin';
     const pushRemote = repo?.pushRemote?.name ?? 'origin';
     // compileSetupSpec still uses the legacy WorkspaceLocation format.

@@ -1,8 +1,8 @@
-import type { FileSystemProvider } from '@main/core/fs/types';
-import type { RepositoryGitProvider } from '@main/core/git/repository-git-provider';
+import type { IFileSystem } from '@emdash/core/files';
+import { err, ok, type Result } from '@emdash/shared';
 import { appSettingsService } from '@main/core/settings/settings-service';
 import { log } from '@main/lib/logger';
-import { remoteNameFromQualifiedRef } from '@shared/core/git/git-utils';
+import { remoteNameFromQualifiedRef } from '@shared/core/git/utils';
 import {
   baseProjectSettingsSchema,
   DEFAULT_PRESERVE_PATTERNS,
@@ -14,9 +14,11 @@ import {
   type ShareableProjectSettings,
 } from '@shared/core/project-settings/project-settings';
 import { SHAREABLE_FIELD_ACCESSORS } from '@shared/core/project-settings/project-settings-fields';
-import { err, ok, type Result } from '@shared/lib/result';
 import type { UpdateProjectSettingsError } from '@shared/projects';
-import { migrateLegacyProjectSettingsIfNeeded } from '../legacy-project-settings-migration';
+import {
+  migrateLegacyProjectSettingsIfNeeded,
+  type ProjectSettingsGitInspector,
+} from '../legacy-project-settings-migration';
 import { serializeShareableProjectSettings } from '../legacy-shareable-migration-marker';
 import { compactUndefined, parseJsonObject, readJson } from '../project-settings-json';
 import { ProjectSettingsRepository } from '../project-settings-storage';
@@ -24,7 +26,7 @@ import type { ProjectSettingsPatch, ProjectSettingsProvider } from '../provider'
 import { CONFIG_FILE } from '../sharing/workspace-config-file';
 
 export type DbProjectSettingsProviderOptions = {
-  git?: Pick<RepositoryGitProvider, 'isFileCleanlyTracked'>;
+  git?: ProjectSettingsGitInspector;
 };
 
 export abstract class DbProjectSettingsProvider implements ProjectSettingsProvider {
@@ -35,7 +37,8 @@ export abstract class DbProjectSettingsProvider implements ProjectSettingsProvid
     private readonly projectId: string,
     protected readonly projectPath: string,
     protected readonly defaultBranchFallback: string = 'main',
-    private readonly configReader: Pick<FileSystemProvider, 'exists' | 'read'> | undefined,
+    private readonly configReader: Pick<IFileSystem, 'exists' | 'readText'> | undefined,
+    private readonly joinProjectPath: (rootPath: string, relPath: string) => string,
     private readonly options: DbProjectSettingsProviderOptions = {}
   ) {}
 
@@ -61,10 +64,22 @@ export abstract class DbProjectSettingsProvider implements ProjectSettingsProvid
 
   private async hasSharedPreservePatterns(): Promise<boolean> {
     if (!this.configReader) return false;
+    const configPath = this.projectFilePath(CONFIG_FILE);
     try {
-      if (!(await this.configReader.exists(CONFIG_FILE))) return false;
-      const { content } = await this.configReader.read(CONFIG_FILE);
-      const parsed = shareableProjectSettingsSchema.safeParse(parseJsonObject(content));
+      const exists = await this.configReader.exists(configPath);
+      if (!exists.success || !exists.data) return false;
+      const content = await this.configReader.readText(configPath);
+      if (!content.success) return false;
+      if (content.data.truncated) {
+        log.warn('Shared project settings were truncated during initialization', {
+          path: configPath,
+          totalSize: content.data.totalSize,
+        });
+        return false;
+      }
+      const parsed = shareableProjectSettingsSchema.safeParse(
+        parseJsonObject(content.data.content)
+      );
       if (!parsed.success) {
         log.warn('Failed to inspect shared project settings during initialization', parsed.error);
         return false;
@@ -74,6 +89,10 @@ export abstract class DbProjectSettingsProvider implements ProjectSettingsProvid
       log.warn('Failed to inspect shared project settings during initialization', error);
       return false;
     }
+  }
+
+  private projectFilePath(relPath: string): string {
+    return this.joinProjectPath(this.projectPath, relPath);
   }
 
   private async ensureRow(): Promise<void> {
@@ -126,7 +145,7 @@ export abstract class DbProjectSettingsProvider implements ProjectSettingsProvid
     };
   }
 
-  private async migrateLegacyConfigIfNeeded(): Promise<void> {
+  private async migrateLegacyConfigIfNeeded(git = this.options.git): Promise<void> {
     if (this.legacyMigrationPromise) {
       await this.legacyMigrationPromise;
       return;
@@ -138,9 +157,10 @@ export abstract class DbProjectSettingsProvider implements ProjectSettingsProvid
         projectId: this.projectId,
         row,
         configReader: this.configReader,
+        configPath: this.projectFilePath(CONFIG_FILE),
         defaultBranchFallback: this.defaultBranchFallback,
         storage: this.storage,
-        git: this.options.git,
+        git,
         normalizeStoredWorktreeDirectory: (worktreeDirectory) =>
           this.normalizeStoredWorktreeDirectory(worktreeDirectory),
       });
@@ -154,9 +174,9 @@ export abstract class DbProjectSettingsProvider implements ProjectSettingsProvid
     }
   }
 
-  async ensure(): Promise<void> {
+  async ensure(options: DbProjectSettingsProviderOptions = {}): Promise<void> {
     await this.ensureRow();
-    await this.migrateLegacyConfigIfNeeded();
+    await this.migrateLegacyConfigIfNeeded(options.git);
   }
 
   async get(): Promise<ProjectSettings> {

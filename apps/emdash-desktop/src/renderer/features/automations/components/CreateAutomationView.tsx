@@ -60,7 +60,7 @@ export const CreateAutomationView = observer(function CreateAutomationView({
   const isPending = create.isPending;
 
   async function handleSave() {
-    if (!effectiveProjectId || !canSave) return;
+    if (!effectiveProjectId || !provider || !canSave) return;
     setError(null);
     const taskConfig = buildTaskConfig(effectiveProjectId);
     if (!taskConfig) return;
@@ -71,10 +71,13 @@ export const CreateAutomationView = observer(function CreateAutomationView({
       return;
     }
     setCronError(null);
+    const useChatUi = formState.initialConversation.useChatUi;
     const conversationConfig: ConversationConfig = {
       prompt: prompt.trim(),
       provider,
       autoApprove: false,
+      model: formState.model ?? undefined,
+      type: useChatUi ? 'acp' : 'pty',
     };
     try {
       const trimmedName = name.trim();

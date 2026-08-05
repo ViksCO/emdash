@@ -1,3 +1,4 @@
+import type { AgentProviderId } from '@emdash/plugins/agents';
 import { ExternalLink, Globe, Pencil, Plus, Terminal } from 'lucide-react';
 import React from 'react';
 import { AgentIcon } from '@renderer/lib/components/agent-icon';
@@ -6,7 +7,6 @@ import { useAgents } from '@renderer/lib/stores/use-agents';
 import { Button } from '@renderer/lib/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@renderer/lib/ui/tooltip';
 import { McpServerIcon } from '@renderer/utils/mcpIcons';
-import { type AgentProviderId } from '@shared/core/agents/agent-provider-registry';
 import type { McpCatalogEntry, McpServer } from '@shared/core/mcp/types';
 
 interface McpCardProps {
@@ -15,6 +15,8 @@ interface McpCardProps {
   onEdit?: (server: McpServer) => void;
   onAdd?: (entry: McpCatalogEntry) => void;
 }
+
+const MAX_VISIBLE_PROVIDERS = 5;
 
 function getTransport(server?: McpServer, entry?: McpCatalogEntry): 'stdio' | 'http' {
   if (server) return server.transport;
@@ -34,6 +36,8 @@ export const McpCard: React.FC<McpCardProps> = ({ server, catalogEntry, onEdit, 
   const syncedProviders = (server?.providers ?? []).filter((id) =>
     agentIds.has(id)
   ) as AgentProviderId[];
+  const visibleProviders = syncedProviders.slice(0, MAX_VISIBLE_PROVIDERS);
+  const hiddenProviderCount = syncedProviders.length - visibleProviders.length;
 
   const handleClick = () => {
     if (isInstalled && server && onEdit) {
@@ -58,8 +62,8 @@ export const McpCard: React.FC<McpCardProps> = ({ server, catalogEntry, onEdit, 
     >
       <McpServerIcon name={name} iconKey={catalogEntry?.key ?? server?.name} />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <div className="flex items-center gap-2">
-          <h3 className="text-smd truncate">{name}</h3>
+        <div className="flex min-w-0 items-center gap-2">
+          <h3 className="text-smd min-w-0 truncate">{name}</h3>
           <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-background-2 px-1 py-0.5 text-[10px] text-foreground-muted">
             {transport === 'http' ? <Globe className="size-2" /> : <Terminal className="size-2" />}
             {transport}
@@ -67,15 +71,20 @@ export const McpCard: React.FC<McpCardProps> = ({ server, catalogEntry, onEdit, 
         </div>
         {description && <p className="line-clamp-1 text-xs text-foreground-muted">{description}</p>}
         {syncedProviders.length > 0 && (
-          <div className="mt-1.5 flex items-center gap-1">
-            {syncedProviders.map((id) => (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
+            {visibleProviders.map((id) => (
               <AgentIcon key={id} id={id} size={14} className="rounded-sm" />
             ))}
+            {hiddenProviderCount > 0 && (
+              <span className="text-[10px] leading-none text-foreground-muted">
+                +{hiddenProviderCount}
+              </span>
+            )}
           </div>
         )}
       </div>
 
-      <div className="absolute top-1/2 right-2 flex -translate-y-1/2 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      <div className="absolute inset-y-0 right-0 flex items-center gap-1 rounded-r-lg bg-linear-to-r from-transparent to-background-2 pr-3 pl-10 opacity-0 transition-opacity group-hover:opacity-100">
         {docsUrl && (
           <Tooltip>
             <TooltipTrigger>

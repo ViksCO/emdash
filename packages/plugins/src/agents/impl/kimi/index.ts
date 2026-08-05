@@ -1,6 +1,7 @@
-import { definePlugin, registerPluginBehavior } from '@emdash/shared/agents/plugins';
-import type { AgentCommand, CommandContext } from '@emdash/shared/agents/plugins';
-import { buildStandardCommand } from '@emdash/shared/agents/plugins/helpers';
+import { definePlugin, registerPluginBehavior } from '@emdash/core/agents/plugins';
+import type { AgentCommand, CommandContext } from '@emdash/core/agents/plugins';
+import { buildStandardCommand } from '@emdash/core/agents/plugins/helpers';
+import { createNativeAcpBehavior } from '../../helpers/acp-stdio';
 import { addKimiHooksToConfigText, buildKimiHookConfig } from './hooks';
 
 function injectKimiHooksIntoInlineConfig(args: string[]): string[] {
@@ -35,11 +36,11 @@ export const plugin = definePlugin(
     websiteUrl: 'https://moonshotai.github.io/kimi-cli/en/guides/getting-started.html',
   },
   {
-    autoApprove: {
+    acp: {
       kind: 'supported',
     },
-    effort: {
-      kind: 'none',
+    autoApprove: {
+      kind: 'supported',
     },
     hooks: {
       kind: 'config',
@@ -74,15 +75,6 @@ export const plugin = definePlugin(
         },
       },
     },
-    mcp: {
-      kind: 'none',
-    },
-    models: {
-      kind: 'none',
-    },
-    plugins: {
-      kind: 'none',
-    },
     prompt: {
       kind: 'keystroke',
     },
@@ -94,6 +86,9 @@ export const plugin = definePlugin(
 );
 
 export const provider = registerPluginBehavior(plugin, {
+  acp: createNativeAcpBehavior(() => ({
+    args: ['acp'],
+  })),
   prompt: {
     buildCommand: buildKimiCommand,
   },

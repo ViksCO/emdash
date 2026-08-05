@@ -1,8 +1,10 @@
+import type { Commit, GitChange, GitObjectRef } from '@emdash/core/git';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useMemo, useRef, useState } from 'react';
 import { usePrefetchDiffModels } from '@renderer/features/tasks/diff-view/changes-panel/hooks/use-prefetch-diff-models';
+import { activeDiffEntry } from '@renderer/features/tasks/diff-view/pane-selectors';
 import {
   useTaskViewContext,
   useWorkspaceId,
@@ -11,33 +13,59 @@ import {
 import { EmptyState } from '@renderer/lib/ui/empty-state';
 import { RelativeTime } from '@renderer/lib/ui/relative-time';
 import { cn } from '@renderer/utils/utils';
-import {
-  commitRef,
-  refsEqual,
-  type Commit,
-  type GitChange,
-  type GitObjectRef,
-} from '@shared/core/git/git';
+import { commitRef, refsEqual } from '@shared/core/git/utils';
 import { ChangesListItem } from '../changes-list-item';
 import { useCommitFiles } from './use-commit-files';
-import { usePrCommits } from './use-pr-commits';
+import { type CommitRange, useCommits } from './use-commits';
 
 const ESTIMATED_COMMIT_ROW_HEIGHT = 43;
 const COMMIT_ROW_GAP = 4;
 
-export const PrCommitsList = observer(function PrCommitsList() {
+const DEFAULT_EMPTY_STATE = {
+  label: 'No commits',
+  description: 'No commits available',
+};
+
+type CommitListEmptyState = {
+  label: string;
+  description: string;
+};
+
+type ExpandedCommitState = {
+  rangeIdentity: string;
+  hashes: ReadonlySet<string>;
+};
+
+const EMPTY_EXPANDED_HASHES: ReadonlySet<string> = new Set();
+
+function commitRangeIdentity(range: CommitRange | undefined): string {
+  if (!range) return 'none';
+  return `${range.source}:${range.baseRefOid}:${range.headRefOid}:${range.revision ?? 0}`;
+}
+
+export const CommitRangeCommitsList = observer(function CommitRangeCommitsList({
+  range,
+  emptyState = DEFAULT_EMPTY_STATE,
+}: {
+  range: CommitRange | undefined;
+  emptyState?: CommitListEmptyState;
+}) {
   const { projectId } = useTaskViewContext();
   const workspaceId = useWorkspaceId();
-  const taskView = useWorkspaceViewModel();
-  const pr = taskView.prStore?.currentPr;
-  const [expandedHashes, setExpandedHashes] = useState<Set<string>>(() => new Set());
-  const { data, isFetchingNextPage, hasNextPage, fetchNextPage } = usePrCommits(
+  const rangeIdentity = commitRangeIdentity(range);
+  const [expanded, setExpanded] = useState<ExpandedCommitState>(() => ({
+    rangeIdentity,
+    hashes: new Set(),
+  }));
+  const { data, isFetchingNextPage, hasNextPage, fetchNextPage } = useCommits(
     projectId,
     workspaceId,
-    pr
+    range
   );
 
-  const commits = data?.pages.flat() ?? [];
+  const commits = data?.pages.flatMap((page) => page.commits) ?? [];
+  const expandedHashes =
+    expanded.rangeIdentity === rangeIdentity ? expanded.hashes : EMPTY_EXPANDED_HASHES;
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: commits.length,
@@ -49,19 +77,21 @@ export const PrCommitsList = observer(function PrCommitsList() {
   });
 
   const toggleExpanded = (hash: string) => {
-    setExpandedHashes((current) => {
-      const next = new Set(current);
+    setExpanded((current) => {
+      const currentHashes =
+        current.rangeIdentity === rangeIdentity ? current.hashes : EMPTY_EXPANDED_HASHES;
+      const next = new Set(currentHashes);
       if (next.has(hash)) {
         next.delete(hash);
       } else {
         next.add(hash);
       }
-      return next;
+      return { rangeIdentity, hashes: next };
     });
   };
 
   if (commits.length === 0 && !isFetchingNextPage) {
-    return <EmptyState label="No commits" description="No commits available" />;
+    return <EmptyState label={emptyState.label} description={emptyState.description} />;
   }
 
   return (
@@ -196,41 +226,49 @@ const CommitFilesList = observer(function CommitFilesList({ commit }: { commit: 
     modifiedRef
   );
 
+  const _activeDiff = activeDiffEntry(taskView.activePane);
   const activePath =
-    taskView.tabManager.activeDescriptor?.kind === 'diff' &&
-    taskView.tabManager.activeDescriptor.diffGroup === 'git' &&
-    refsEqual(taskView.tabManager.activeDescriptor.originalRef, originalRef) &&
-    refsMatch(taskView.tabManager.activeDescriptor.modifiedRef, modifiedRef)
-      ? taskView.tabManager.activeDescriptor.path
+    _activeDiff?.diffGroup === 'git' &&
+    refsEqual(_activeDiff.originalRef, originalRef) &&
+    refsMatch(_activeDiff.modifiedRef, modifiedRef)
+      ? _activeDiff.path
       : undefined;
 
   const openPreview = (change: GitChange) => {
-    taskView.tabManager.openDiffPreview(
+    taskView.activePane.open(
+      'diff',
       {
-        path: change.path,
-        type: 'git',
-        group: 'git',
-        originalRef,
-        modifiedRef,
-        commitOriginalSha: originalSha,
-        commitModifiedSha: commit.hash,
+        activeFile: {
+          path: change.path,
+          type: 'git',
+          group: 'git',
+          originalRef,
+          modifiedRef,
+          commitOriginalSha: originalSha,
+          commitModifiedSha: commit.hash,
+        },
+        status: change.status,
       },
-      change.status
+      { preview: true }
     );
   };
 
   const openDiff = (change: GitChange) => {
-    taskView.tabManager.openDiff(
+    taskView.activePane.open(
+      'diff',
       {
-        path: change.path,
-        type: 'git',
-        group: 'git',
-        originalRef,
-        modifiedRef,
-        commitOriginalSha: originalSha,
-        commitModifiedSha: commit.hash,
+        activeFile: {
+          path: change.path,
+          type: 'git',
+          group: 'git',
+          originalRef,
+          modifiedRef,
+          commitOriginalSha: originalSha,
+          commitModifiedSha: commit.hash,
+        },
+        status: change.status,
       },
-      change.status
+      { preview: false }
     );
   };
 

@@ -1,11 +1,13 @@
-import { definePlugin, registerPluginBehavior } from '@emdash/shared/agents/plugins';
+import { definePlugin, registerPluginBehavior } from '@emdash/core/agents/plugins';
 import {
   buildStandardCommand,
   copilotMcpAdapter,
   npmDependency,
-} from '@emdash/shared/agents/plugins/helpers';
+} from '@emdash/core/agents/plugins/helpers';
+import { createNativeAcpBehavior } from '../../helpers/acp-stdio';
 import { buildCopilotHookConfig } from './hooks';
 import { icon } from './icon';
+import { buildCopilotTrustBehavior } from './trust';
 
 export const plugin = definePlugin(
   {
@@ -16,11 +18,11 @@ export const plugin = definePlugin(
     websiteUrl: 'https://docs.github.com/en/copilot/how-tos/set-up/install-copilot-cli',
   },
   {
-    autoApprove: {
+    acp: {
       kind: 'supported',
     },
-    effort: {
-      kind: 'none',
+    autoApprove: {
+      kind: 'supported',
     },
     hooks: {
       kind: 'config',
@@ -33,12 +35,6 @@ export const plugin = definePlugin(
       scope: 'global',
       supportedTransports: ['stdio', 'http'],
     },
-    models: {
-      kind: 'none',
-    },
-    plugins: {
-      kind: 'none',
-    },
     prompt: {
       kind: 'argv',
       flag: '-i',
@@ -46,11 +42,17 @@ export const plugin = definePlugin(
     sessions: {
       kind: 'resumable',
     },
+    trust: {
+      kind: 'supported',
+    },
   },
   { icon }
 );
 
 export const provider = registerPluginBehavior(plugin, {
+  acp: createNativeAcpBehavior(() => ({
+    args: ['--acp'],
+  })),
   prompt: {
     buildCommand: (ctx) =>
       buildStandardCommand(ctx, {
@@ -63,4 +65,5 @@ export const provider = registerPluginBehavior(plugin, {
   },
   hooks: buildCopilotHookConfig(),
   mcp: copilotMcpAdapter(),
+  trust: buildCopilotTrustBehavior(),
 });

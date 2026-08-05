@@ -5,13 +5,14 @@ import {
   createRPCNamespace,
   createRPCRouter,
   registerRPCRouter,
+  withSender,
 } from './rpc';
 
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const gitController = createRPCController({
+const vcsController = createRPCController({
   commit: (msg: string) => Promise.resolve(`committed: ${msg}`),
   status: () => Promise.resolve('clean'),
 });
@@ -21,21 +22,26 @@ const fsController = createRPCController({
   write: (path: string, data: string) => Promise.resolve(data.length),
 });
 
-const wsGitController = createRPCController({
+const gitWorktreeController = createRPCController({
   clone: (url: string) => Promise.resolve(`cloned ${url}`),
 });
 
-const wsFsController = createRPCController({
+const gitRepositoryController = createRPCController({
+  branches: () => Promise.resolve(['main']),
+});
+
+const wsFilesController = createRPCController({
   list: (dir: string) => Promise.resolve([dir]),
 });
 
 const workspaceNamespace = createRPCNamespace({
-  git: wsGitController,
-  fs: wsFsController,
+  gitWorktree: gitWorktreeController,
+  files: wsFilesController,
 });
 
 const router = createRPCRouter({
-  git: gitController,
+  vcs: vcsController,
+  gitRepository: gitRepositoryController,
   fs: fsController,
   workspace: workspaceNamespace,
 });
@@ -52,7 +58,7 @@ function makeIpcMainStub() {
     invoke(channel: string, ...args: unknown[]) {
       const handler = registered.get(channel);
       if (!handler) throw new Error(`No handler registered for channel: ${channel}`);
-      return handler({} /* _event */, ...args);
+      return handler({ sender: { id: 42 } } /* _event */, ...args);
     },
     registeredChannels() {
       return [...registered.keys()];
@@ -69,18 +75,18 @@ describe('createRPCClient', () => {
     const invoke = vi.fn().mockResolvedValue('ok');
     const rpc = createRPCClient<Router>(invoke);
 
-    await rpc.git.commit('hello');
+    await rpc.vcs.commit('hello');
 
-    expect(invoke).toHaveBeenCalledWith('git.commit', 'hello');
+    expect(invoke).toHaveBeenCalledWith('vcs.commit', 'hello');
   });
 
   it('calls invoke with the nested channel and args for a 3-level call', async () => {
     const invoke = vi.fn().mockResolvedValue('ok');
     const rpc = createRPCClient<Router>(invoke);
 
-    await rpc.workspace.git.clone('https://example.com/repo');
+    await rpc.workspace.gitWorktree.clone('https://example.com/repo');
 
-    expect(invoke).toHaveBeenCalledWith('workspace.git.clone', 'https://example.com/repo');
+    expect(invoke).toHaveBeenCalledWith('workspace.gitWorktree.clone', 'https://example.com/repo');
   });
 
   it('forwards multiple arguments correctly', async () => {
@@ -96,7 +102,7 @@ describe('createRPCClient', () => {
     const invoke = vi.fn().mockResolvedValue('clean');
     const rpc = createRPCClient<Router>(invoke);
 
-    const result = await rpc.git.status();
+    const result = await rpc.vcs.status();
 
     expect(result).toBe('clean');
   });
@@ -105,9 +111,9 @@ describe('createRPCClient', () => {
     const invoke = vi.fn().mockResolvedValue([]);
     const rpc = createRPCClient<Router>(invoke);
 
-    await rpc.workspace.fs.list('projects');
+    await rpc.workspace.files.list('projects');
 
-    expect(invoke).toHaveBeenCalledWith('workspace.fs.list', 'projects');
+    expect(invoke).toHaveBeenCalledWith('workspace.files.list', 'projects');
   });
 });
 
@@ -120,8 +126,8 @@ describe('registerRPCRouter', () => {
     const ipc = makeIpcMainStub();
     registerRPCRouter(router, ipc as never);
 
-    expect(ipc.registeredChannels()).toContain('git.commit');
-    expect(ipc.registeredChannels()).toContain('git.status');
+    expect(ipc.registeredChannels()).toContain('vcs.commit');
+    expect(ipc.registeredChannels()).toContain('vcs.status');
     expect(ipc.registeredChannels()).toContain('fs.read');
     expect(ipc.registeredChannels()).toContain('fs.write');
   });
@@ -130,15 +136,16 @@ describe('registerRPCRouter', () => {
     const ipc = makeIpcMainStub();
     registerRPCRouter(router, ipc as never);
 
-    expect(ipc.registeredChannels()).toContain('workspace.git.clone');
-    expect(ipc.registeredChannels()).toContain('workspace.fs.list');
+    expect(ipc.registeredChannels()).toContain('workspace.gitWorktree.clone');
+    expect(ipc.registeredChannels()).toContain('gitRepository.branches');
+    expect(ipc.registeredChannels()).toContain('workspace.files.list');
   });
 
   it('calls through to the original handler function with args', async () => {
     const ipc = makeIpcMainStub();
     registerRPCRouter(router, ipc as never);
 
-    const result = await ipc.invoke('git.commit', 'my message');
+    const result = await ipc.invoke('vcs.commit', 'my message');
     expect(result).toBe('committed: my message');
   });
 
@@ -146,8 +153,24 @@ describe('registerRPCRouter', () => {
     const ipc = makeIpcMainStub();
     registerRPCRouter(router, ipc as never);
 
-    const result = await ipc.invoke('workspace.git.clone', 'https://example.com');
+    const result = await ipc.invoke('workspace.gitWorktree.clone', 'https://example.com');
     expect(result).toBe('cloned https://example.com');
+  });
+
+  it('passes sender id to sender-aware handlers without exposing it to callers', async () => {
+    const senderController = createRPCController({
+      currentWindow: withSender((senderId: number, label: string) => `${senderId}:${label}`),
+    });
+    const senderRouter = createRPCRouter({ sender: senderController });
+    const ipc = makeIpcMainStub();
+    registerRPCRouter(senderRouter, ipc as never);
+
+    const result = await ipc.invoke('sender.currentWindow', 'active');
+
+    expect(result).toBe('42:active');
+    expectTypeOf(createRPCClient<typeof senderRouter>(vi.fn()).sender.currentWindow).toEqualTypeOf<
+      (label: string) => Promise<string>
+    >();
   });
 
   it('does not register any channel for non-function, non-object values', () => {
@@ -167,11 +190,11 @@ describe('IpcClient type-safety', () => {
   const rpc = createRPCClient<Router>(invoke);
 
   it('types a flat procedure as an async function with the original signature', () => {
-    expectTypeOf(rpc.git.commit).toEqualTypeOf<(msg: string) => Promise<string>>();
+    expectTypeOf(rpc.vcs.commit).toEqualTypeOf<(msg: string) => Promise<string>>();
   });
 
   it('types a flat zero-arg procedure correctly', () => {
-    expectTypeOf(rpc.git.status).toEqualTypeOf<() => Promise<string>>();
+    expectTypeOf(rpc.vcs.status).toEqualTypeOf<() => Promise<string>>();
   });
 
   it('types a flat multi-arg procedure correctly', () => {
@@ -179,13 +202,13 @@ describe('IpcClient type-safety', () => {
   });
 
   it('types a nested procedure as an async function with the original signature', () => {
-    expectTypeOf(rpc.workspace.git.clone).toEqualTypeOf<(url: string) => Promise<string>>();
+    expectTypeOf(rpc.workspace.gitWorktree.clone).toEqualTypeOf<(url: string) => Promise<string>>();
   });
 
   it('types a nested namespace as a sub-namespace object, not a callable', () => {
     expectTypeOf(rpc.workspace).toEqualTypeOf<{
-      git: { clone: (url: string) => Promise<string> };
-      fs: { list: (dir: string) => Promise<string[]> };
+      files: { list: (dir: string) => Promise<string[]> };
+      gitWorktree: { clone: (url: string) => Promise<string> };
     }>();
   });
 
@@ -201,7 +224,7 @@ describe('IpcClient type-safety', () => {
   });
 
   it('unwraps a Promise return value so it is not double-wrapped', () => {
-    // gitController.commit returns Promise<string> — IpcClient should give Promise<string>, not Promise<Promise<string>>
-    expectTypeOf(rpc.git.commit).returns.toEqualTypeOf<Promise<string>>();
+    // vcsController.commit returns Promise<string> — IpcClient should give Promise<string>, not Promise<Promise<string>>
+    expectTypeOf(rpc.vcs.commit).returns.toEqualTypeOf<Promise<string>>();
   });
 });

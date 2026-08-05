@@ -1,22 +1,22 @@
+import type { AgentProviderId } from '@emdash/plugins/agents';
 import { useMemo, useState } from 'react';
 import { DEFAULT_CRON_STATE, toCron } from '@renderer/lib/CronPicker/cron-utils';
-import { isValidProviderId } from '@shared/core/agents/agent-provider-registry';
+import { useAgents } from '@renderer/lib/stores/use-agents';
 import type { Automation } from '@shared/core/automations/automation';
 import type { StoredAutomationTaskConfig, TriggerConfig } from '@shared/core/automations/config';
 import { getLocalTimeZone } from '@shared/core/automations/timezone';
-import type { Branch } from '@shared/core/git/git';
 import {
   asMounted,
   firstMountedProjectId,
   getProjectStore,
-  getRepositoryStore,
 } from '../projects/stores/project-selectors';
-import { useInitialConversationState } from '../tasks/conversations/initial-conversation-section';
+import { useProjectGitContext } from '../tasks/create-task-modal/use-project-git-context';
 import { useTaskName } from '../tasks/create-task-modal/use-task-name';
 import {
   useWorkspaceConfig,
   type WorkspaceConfigInitial,
 } from '../tasks/create-task-modal/use-workspace-config';
+import { useInitialConversationState } from '../tasks/task-config/initial-conversation-section';
 import type { BuiltinAutomationTemplate } from './automation-template';
 
 const DEFAULT_CRON = toCron(DEFAULT_CRON_STATE);
@@ -26,7 +26,7 @@ const DEFAULT_CRON = toCron(DEFAULT_CRON_STATE);
  */
 function workspaceInitialFromConfig(
   config: StoredAutomationTaskConfig | null | undefined
-): WorkspaceConfigInitial & { fromBranch?: Branch; pushBranch?: boolean } {
+): WorkspaceConfigInitial {
   if (!config) return { mode: 'new-worktree', presetId: 'new-worktree' };
   const { git, workspace } = config.workspaceConfig;
 
@@ -38,8 +38,22 @@ function workspaceInitialFromConfig(
     return {
       mode: 'new-worktree',
       presetId: 'new-worktree',
-      fromBranch: git.fromBranch,
-      pushBranch: git.pushBranch,
+      branchSelection: {
+        createBranchAndWorktree: true,
+        branchOverride: git.fromBranch,
+        pushBranch: git.pushBranch,
+      },
+    };
+  }
+
+  if (git.kind === 'use-branch') {
+    return {
+      mode: 'new-worktree',
+      presetId: 'new-worktree',
+      branchSelection: {
+        createBranchAndWorktree: false,
+        branchOverride: { type: 'local', branch: git.branchName },
+      },
     };
   }
 
@@ -69,6 +83,7 @@ export function useAutomationFormState(
   const seedConfig = seed?.taskConfig;
   const seedPrompt =
     seedConversationConfig?.prompt ?? initialTemplate?.defaultConversationConfig.initialPrompt;
+  const { data: agents } = useAgents();
 
   const [name, setName] = useState(seed?.name ?? initialTemplate?.name ?? '');
   const [projectId, setProjectId] = useState<string | undefined>(
@@ -82,11 +97,15 @@ export function useAutomationFormState(
   const effectiveProjectId =
     projectId && asMounted(getProjectStore(projectId)) ? projectId : firstMountedProjectId();
 
-  const seedProvider = isValidProviderId(seedConversationConfig?.provider)
-    ? seedConversationConfig?.provider
+  const seedProvider = agents?.some((agent) => agent.id === seedConversationConfig?.provider)
+    ? (seedConversationConfig?.provider as AgentProviderId)
     : undefined;
 
-  const initialConversation = useInitialConversationState(effectiveProjectId, seedProvider);
+  const seedModel = seedConversationConfig?.model ?? undefined;
+
+  const initialConversation = useInitialConversationState(effectiveProjectId, seedProvider, false, {
+    resetPromptOnProjectChange: false,
+  });
 
   const [promptSeeded, setPromptSeeded] = useState(false);
   if (!promptSeeded && seedPrompt) {
@@ -94,13 +113,21 @@ export function useAutomationFormState(
     initialConversation.setPrompt(seedPrompt);
   }
 
-  const repo = effectiveProjectId ? getRepositoryStore(effectiveProjectId) : undefined;
-  const defaultBranch = repo?.defaultBranch;
-  const isUnborn = repo?.isUnborn ?? false;
-  const currentBranch = repo?.currentBranch ?? null;
+  const [modelSeeded, setModelSeeded] = useState(false);
+  if (!modelSeeded && seedModel) {
+    setModelSeeded(true);
+    initialConversation.setModel(seedModel);
+  }
 
-  const repositoryWorkspaceId =
-    asMounted(getProjectStore(effectiveProjectId ?? ''))?.data?.repositoryWorkspaceId ?? null;
+  const seedType = seedConversationConfig?.type;
+  const [chatUiSeeded, setChatUiSeeded] = useState(false);
+  if (!chatUiSeeded && seedType === 'acp') {
+    setChatUiSeeded(true);
+    initialConversation.setUseChatUi(true);
+  }
+
+  const { defaultBranch, isUnborn, currentBranch, repositoryWorkspaceId } =
+    useProjectGitContext(effectiveProjectId);
 
   // Derive initial workspace config state from stored automation (for edit mode).
   const wsInitial = useMemo(() => workspaceInitialFromConfig(seedConfig), [seedConfig]);
@@ -125,11 +152,13 @@ export function useAutomationFormState(
   });
 
   const prompt = initialConversation.prompt;
-  const provider = initialConversation.provider ?? 'claude';
+  const provider = initialConversation.provider;
+  const model = initialConversation.model;
 
   const canSave =
     name.trim().length > 0 &&
     prompt.trim().length > 0 &&
+    !!provider &&
     !!effectiveProjectId &&
     workspaceConfig.isValid;
 
@@ -162,7 +191,7 @@ export function useAutomationFormState(
       workspaceConfig: patchedConfig,
     };
 
-    // Strip MobX Proxy wrappers (e.g. fromBranch coming from getRepositoryStore)
+    // Strip MobX Proxy wrappers (e.g. fromBranch coming from getGitRepositoryStore)
     // before the value crosses the Electron contextBridge. The structured clone
     // algorithm rejects Proxy objects with a DataCloneError.
     return JSON.parse(JSON.stringify(result)) as StoredAutomationTaskConfig;
@@ -191,6 +220,7 @@ export function useAutomationFormState(
     currentBranch,
     prompt,
     provider,
+    model,
     canSave,
     triggerConfig,
     applyTemplate,

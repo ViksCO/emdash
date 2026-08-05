@@ -1,6 +1,6 @@
+import type { AgentProviderId } from '@emdash/plugins/agents';
 import z from 'zod';
 import { BROWSER_ISOLATED_PROFILE_ID } from '@shared/browser';
-import { AGENT_PROVIDER_IDS } from '@shared/core/agents/agent-provider-registry';
 import {
   TERMINAL_FONT_SIZE_MAX,
   TERMINAL_FONT_SIZE_MIN,
@@ -9,6 +9,7 @@ import {
 import { openInAppIdSchema } from '@shared/openInApps';
 import { APP_SHORTCUTS } from '@shared/shortcuts';
 import { normalizeBranchPrefix } from '@shared/util/branch-prefix';
+import { isValidProviderId } from '../agents/plugin-registry';
 import { DEFAULT_AGENT_ID } from './settings-registry';
 
 export const projectSettingsSchema = z.object({
@@ -34,15 +35,13 @@ export const notificationSettingsSchema = z.object({
 
 export const taskSettingsSchema = z.object({
   autoGenerateName: z.boolean(),
+  autoApproveByDefault: z.boolean(),
   autoTrustWorktrees: z.boolean(),
   createBranchAndWorktree: z.boolean(),
+  deleteBranchByDefault: z.boolean(),
   preserveNameCapitalization: z.boolean(),
   includeIssueContextByDefault: z.boolean(),
 });
-
-export const agentAutoApproveDefaultsSchema = z
-  .partialRecord(z.enum(AGENT_PROVIDER_IDS), z.boolean())
-  .default({});
 
 export const terminalSettingsSchema = z.object({
   fontFamily: z.string().optional(),
@@ -59,7 +58,10 @@ export const themeSchema = z
   .optional()
   .default(null);
 
-export const defaultAgentSchema = z.optional(z.enum(AGENT_PROVIDER_IDS)).default(DEFAULT_AGENT_ID);
+export const defaultAgentSchema = z
+  .custom<AgentProviderId>(isValidProviderId)
+  .optional()
+  .default(DEFAULT_AGENT_ID);
 
 export const keyboardSettingsSchema = z
   .optional(
@@ -89,7 +91,6 @@ export const interfaceSettingsSchema = z.object({
   showLeftSidebarLineChanges: z.boolean(),
   showLeftSidebarPrStatus: z.boolean(),
   showLeftSidebarTimestamps: z.boolean(),
-  confirmTabClose: z.boolean(),
   hideContextBar: z.boolean(),
 });
 
@@ -109,6 +110,7 @@ export const browserProfileIdSchema = z
 export const browserSettingsSchema = z
   .object({
     defaultProfileId: z.union([browserProfileIdSchema, z.literal(BROWSER_ISOLATED_PROFILE_ID)]),
+    relaxCorsForLocalhost: z.boolean(),
     profiles: z
       .array(
         z.object({
@@ -139,7 +141,6 @@ export const APP_SETTINGS_SCHEMA_MAP = {
   localProject: localProjectSettingsSchema,
   project: projectSettingsSchema,
   tasks: taskSettingsSchema,
-  agentAutoApproveDefaults: agentAutoApproveDefaultsSchema,
   defaultAgent: defaultAgentSchema,
   keyboard: keyboardSettingsSchema,
   notifications: notificationSettingsSchema,
@@ -157,7 +158,6 @@ export const appSettingsSchema = z.object({
   localProject: localProjectSettingsSchema,
   project: projectSettingsSchema,
   tasks: taskSettingsSchema,
-  agentAutoApproveDefaults: agentAutoApproveDefaultsSchema,
   defaultAgent: defaultAgentSchema,
   keyboard: keyboardSettingsSchema,
   notifications: notificationSettingsSchema,
