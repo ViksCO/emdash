@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { log } from '@main/lib/logger';
-import { buildExternalToolEnv } from './childProcessEnv';
+import { buildExternalToolEnv, stripDevWorkspaceBinDirs } from './childProcessEnv';
 import { getWindowsEnvValue, prependWindowsPathEntry } from './windows-env';
 
 /**
@@ -107,7 +107,7 @@ export function ensureWindowsNpmGlobalBinInPath(
  * (execFile, PTY env builders, dependency prober, etc.) automatically see the
  * full PATH, SSH_AUTH_SOCK, and other variables the user's shell init sets.
  */
-export async function resolveUserEnv(): Promise<void> {
+export async function resolveUserEnv(appRoot?: string): Promise<void> {
   if (process.platform === 'win32') {
     // Windows PATH is managed differently; no login-shell capture needed.
     ensureWindowsNpmGlobalBinInPath();
@@ -162,6 +162,16 @@ export async function resolveUserEnv(): Promise<void> {
       shell,
       error: message,
     });
+  }
+
+  // Whether the shell capture succeeded (its PATH merged first) or timed out
+  // (leaving the inherited dev-launcher PATH untouched), the resulting
+  // process.env.PATH can still carry this checkout's own node_modules/.bin ahead
+  // of the user's globals. Every agent and terminal inherits this PATH, so strip
+  // those entries once here — the single owner of process.env.PATH — before any
+  // dependency probe or spawn reads it.
+  if (appRoot && process.env.PATH) {
+    process.env.PATH = stripDevWorkspaceBinDirs(process.env.PATH, appRoot);
   }
 }
 

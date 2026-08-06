@@ -106,7 +106,7 @@ app.on('activate', () => {
 });
 
 void app.whenReady().then(async () => {
-  await resolveUserEnv();
+  await resolveUserEnv(app.getAppPath());
 
   try {
     await initializeDatabase();

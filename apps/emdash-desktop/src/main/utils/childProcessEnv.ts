@@ -1,3 +1,5 @@
+import * as path from 'node:path';
+
 const APPIMAGE_ENV_KEYS = [
   'APPDIR',
   'APPIMAGE',
@@ -21,6 +23,32 @@ function stripPathLikeAppImageEntries(value: string, appDir?: string): string {
   });
 
   return filtered.join(separator);
+}
+
+// Drop PATH entries that are a `node_modules/.bin` directory belonging to this
+// app's own checkout. A dev launcher (pnpm/nx) prepends these ahead of the
+// user's global tools, and the app process inherits them; forwarding that PATH
+// to spawned agents and terminals lets a workspace shim (e.g.
+// `node_modules/.bin/codex`) shadow the user's global binary — and a shim
+// installed without its platform-native optional dependency then throws on run.
+// Scoped to `appRoot`'s own package roots (the app checkout and its packages),
+// so a user's unrelated project bins are left untouched. A packaged app has no
+// such entries, so this is a no-op there.
+export function stripDevWorkspaceBinDirs(value: string, appRoot: string): string {
+  const separator = process.platform === 'win32' ? ';' : ':';
+  const marker = `${path.sep}node_modules${path.sep}.bin`;
+  const resolvedAppRoot = path.resolve(appRoot);
+  const kept = value
+    .split(separator)
+    .filter(Boolean)
+    .filter((part) => {
+      if (!part.endsWith(marker)) return true;
+      const packageRoot = part.slice(0, -marker.length);
+      return !(
+        resolvedAppRoot === packageRoot || resolvedAppRoot.startsWith(`${packageRoot}${path.sep}`)
+      );
+    });
+  return kept.join(separator);
 }
 
 export function buildExternalToolEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
