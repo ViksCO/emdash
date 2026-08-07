@@ -13,6 +13,7 @@ import { modelRegistry } from '@renderer/lib/monaco/monaco-model-registry';
 import { buildMonacoModelPath } from '@renderer/lib/monaco/monacoModelPath';
 import { resolveWorkspacePath } from '../stores/workspace-path';
 import { EditorProvider } from './editor-provider';
+import { deriveFileContentFlags } from './file-content-flags';
 import { FileContentPreview } from './file-content-preview';
 import { FileContentRenderer } from './file-content-renderer';
 import { FileContentToolbar } from './file-content-toolbar';
@@ -47,13 +48,11 @@ const FileContent = observer(function FileContent({ host, ctx: _ctx }: TabConten
   const activeFile = activeTab?.kind === 'file' ? (activeTab.resource as FileTabResource) : null;
 
   const def = activeFile ? FILE_CONTENT_TYPES[activeFile.contentType] : null;
-  const showSource = def
-    ? def.editable && (activeFile!.viewMode === 'source' || !def.Preview)
-    : false;
-  const showPreview = def
-    ? !!def.Preview && (activeFile!.viewMode === 'preview' || !def.editable)
-    : false;
-  const canToggle = def ? def.editable && !!def.Preview : false;
+  const { showSource, showPreview, canToggle } = deriveFileContentFlags(
+    def,
+    activeFile?.viewMode ?? 'preview',
+    activeFile?.isExternal ?? false
+  );
 
   return (
     <div className="flex h-full w-full flex-col overflow-hidden">
